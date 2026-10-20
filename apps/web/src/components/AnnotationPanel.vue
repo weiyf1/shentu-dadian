@@ -2,12 +2,16 @@
 import { computed, nextTick, ref, watch } from 'vue'
 
 import { formatFullDateTime } from '@/lib/format'
-import type { LocalAnnotation } from '@/types/api'
+import type {
+  AnnotationConflict,
+  LocalAnnotation,
+} from '@/types/api'
 
 const props = defineProps<{
   annotations: LocalAnnotation[]
   selectedId: string | null
   dirtyIds: Set<string>
+  conflicts: Map<string, AnnotationConflict>
   maxCount?: number
 }>()
 
@@ -15,6 +19,8 @@ const emit = defineEmits<{
   select: [annotationId: string]
   updateNote: [annotationId: string, note: string]
   delete: [annotationId: string]
+  resolveRemote: [annotationId: string]
+  keepLocal: [annotationId: string]
 }>()
 
 const listElement = ref<HTMLElement | null>(null)
@@ -27,6 +33,9 @@ const selected = computed(
 
 const selectedIsDirty = computed(
   () => Boolean(props.selectedId && props.dirtyIds.has(props.selectedId)),
+)
+const selectedConflict = computed(() =>
+  props.selectedId ? props.conflicts.get(props.selectedId) : undefined,
 )
 
 watch(
@@ -97,6 +106,7 @@ function annotationNumber(annotation: LocalAnnotation): string {
         :class="{
           'is-selected': annotation.id === selectedId,
           'is-empty-note': !annotation.note.trim(),
+          'has-conflict': conflicts.has(annotation.id),
         }"
         :data-annotation-id="annotation.id"
         :aria-current="annotation.id === selectedId ? 'true' : undefined"
@@ -117,6 +127,12 @@ function annotationNumber(annotation: LocalAnnotation): string {
               class="dirty-badge"
             >
               未保存
+            </span>
+            <span
+              v-if="conflicts.has(annotation.id)"
+              class="conflict-badge"
+            >
+              冲突
             </span>
           </span>
           <span class="annotation-note-preview">
@@ -149,6 +165,46 @@ function annotationNumber(annotation: LocalAnnotation): string {
       <label class="field-label" :for="`note-${selected.id}`">
         标记说明
       </label>
+
+      <div v-if="selectedConflict" class="remote-conflict">
+        <div class="remote-conflict-heading">
+          <strong>
+            {{
+              selectedConflict.kind === 'deleted'
+                ? '远端已删除此标记'
+                : '远端已修改此标记'
+            }}
+          </strong>
+          <span>需要选择保留哪一份</span>
+        </div>
+        <p v-if="selectedConflict.remote" class="remote-note">
+          远端说明：{{ selectedConflict.remote.note }}
+        </p>
+        <p v-else class="remote-note">
+          另一位同事已经删除了这个标记，你的草稿仍保留在这里。
+        </p>
+        <div class="remote-conflict-actions">
+          <button
+            type="button"
+            class="button button-ghost button-small"
+            @click="emit('resolveRemote', selected.id)"
+          >
+            {{ selectedConflict.kind === 'deleted' ? '确认删除' : '使用远端说明' }}
+          </button>
+          <button
+            type="button"
+            class="button button-primary button-small"
+            @click="emit('keepLocal', selected.id)"
+          >
+            {{
+              selectedConflict.kind === 'deleted'
+                ? '重新添加我的草稿'
+                : '保留我的草稿'
+            }}
+          </button>
+        </div>
+      </div>
+
       <textarea
         :id="`note-${selected.id}`"
         ref="editorElement"
@@ -341,6 +397,19 @@ function annotationNumber(annotation: LocalAnnotation): string {
   letter-spacing: 0.04em;
 }
 
+.conflict-badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.annotation-item.has-conflict {
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+
 .empty-list {
   display: flex;
   height: 100%;
@@ -424,6 +493,48 @@ function annotationNumber(annotation: LocalAnnotation): string {
   color: var(--muted);
   font-size: 9px;
   font-variant-numeric: tabular-nums;
+}
+
+.remote-conflict {
+  margin-bottom: 14px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--border));
+  border-radius: 10px;
+  background: var(--danger-soft);
+}
+
+.remote-conflict-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.remote-conflict-heading strong {
+  color: #991b1b;
+  font-size: 11px;
+}
+
+.remote-conflict-heading span {
+  color: #b45353;
+  font-size: 8px;
+}
+
+.remote-note {
+  margin: 9px 0 0;
+  padding: 8px 9px;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 72%);
+  color: #7f1d1d;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.remote-conflict-actions {
+  display: flex;
+  margin-top: 10px;
+  justify-content: flex-end;
+  gap: 7px;
 }
 
 .coordinate-label {

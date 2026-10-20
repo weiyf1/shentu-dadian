@@ -272,12 +272,13 @@ test('annotation CRUD persists the snapshot and checks versions', async () => {
   }
 })
 
-test('batch save is atomic, stable-numbered and revision guarded', async () => {
+test('batch save merges stale revisions and conflicts only on the same annotation', async () => {
   const context = await createContext()
   const imageId = '88888888-8888-4888-8888-888888888888'
   const firstId = '99999999-9999-4999-8999-999999999991'
   const secondId = '99999999-9999-4999-8999-999999999992'
   const thirdId = '99999999-9999-4999-8999-999999999993'
+  const fourthId = '99999999-9999-4999-8999-999999999994'
 
   try {
     const operator = await createSession(context.app, '李雷')
@@ -309,26 +310,30 @@ test('batch save is atomic, stable-numbered and revision guarded', async () => {
       [1, 2],
     )
 
-    const stale = await context.app.inject({
+    const merged = await context.app.inject({
       method: 'POST',
       url: `/api/v1/images/${imageId}/annotations/batch`,
       headers,
       payload: {
-        baseRevision: 1,
-        creates: [{ id: thirdId, x: 10, y: 10, note: '过期保存' }],
+        observedRevision: 1,
+        creates: [{ id: thirdId, x: 10, y: 10, note: '并发新增' }],
       },
     })
-    assert.equal(stale.statusCode, 409)
-    assert.equal(stale.json().error.code, 'IMAGE_REVISION_CONFLICT')
-    assert.equal(stale.json().error.details.currentRevision, 2)
+    assert.equal(merged.statusCode, 200)
+    assert.equal(merged.json().imageRevision, 3)
+    assert.equal(merged.json().concurrentChanges, true)
+    assert.deepEqual(
+      merged.json().annotations.map((item: { number: number }) => item.number),
+      [1, 2, 3],
+    )
 
     const next = await context.app.inject({
       method: 'POST',
       url: `/api/v1/images/${imageId}/annotations/batch`,
       headers,
       payload: {
-        baseRevision: 2,
-        creates: [{ id: thirdId, x: 900, y: 700, note: '新增角标' }],
+        observedRevision: 3,
+        creates: [{ id: fourthId, x: 900, y: 700, note: '新增角标' }],
         updates: [
           { id: firstId, version: 1, note: '主标题需要上移' },
         ],
@@ -336,10 +341,11 @@ test('batch save is atomic, stable-numbered and revision guarded', async () => {
       },
     })
     assert.equal(next.statusCode, 200)
-    assert.equal(next.json().imageRevision, 3)
+    assert.equal(next.json().imageRevision, 4)
+    assert.equal(next.json().concurrentChanges, false)
     assert.deepEqual(
       next.json().annotations.map((item: { number: number }) => item.number),
-      [1, 3],
+      [1, 3, 4],
     )
     assert.equal(next.json().annotations[0].version, 2)
 
@@ -348,12 +354,16 @@ test('batch save is atomic, stable-numbered and revision guarded', async () => {
       url: `/api/v1/images/${imageId}/annotations/batch`,
       headers,
       payload: {
-        baseRevision: 3,
+        observedRevision: 4,
         updates: [{ id: firstId, version: 1, note: '再次覆盖' }],
       },
     })
     assert.equal(annotationConflict.statusCode, 409)
     assert.equal(annotationConflict.json().error.code, 'ANNOTATION_CONFLICT')
+    assert.equal(
+      annotationConflict.json().error.details.currentNote,
+      '主标题需要上移',
+    )
   } finally {
     await closeContext(context)
   }

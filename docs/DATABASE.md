@@ -134,7 +134,7 @@ erDiagram
 | `checksum_sha256` | TEXT | 是 | NULL | 64 位 | 文件 SHA-256 |
 | `width` | INTEGER | 否 | - | `> 0` | 图片原始像素宽度 |
 | `height` | INTEGER | 否 | - | `> 0` | 图片原始像素高度 |
-| `revision` | INTEGER | 否 | 1 | `> 0` | 标注集合版本号 |
+| `revision` | INTEGER | 否 | 1 | `> 0` | 标注集合变化游标 |
 | `next_annotation_number` | INTEGER | 否 | 1 | `> 0` | 下一个标记编号 |
 | `created_by_id` | TEXT | 是 | NULL | FK → operators | 上传人；演示图可为空 |
 | `created_at` | TEXT | 否 | UTC 时间 | - | 创建时间 |
@@ -284,14 +284,16 @@ UNIQUE (image_id, number)
 
 `images.revision`：
 
-- 表示整张图片标注集合的版本。
+- 表示整张图片标注集合的变化游标。
 - 任何新增、修改或删除成功后递增 1。
-- 批量保存请求必须携带打开页面时的 `baseRevision`。
+- 用于比较客户端看到的版本、刷新提示和实时事件去重。
+- 不再作为拒绝整张图并发保存的硬性锁。
 
 `annotations.version`：
 
 - 表示单个标记的版本。
-- 修改说明或删除标记时校验。
+- 修改说明或删除标记时校验，是唯一的写冲突依据。
+- 两人修改不同标记时可以合并保存。
 - 两人修改同一标记时，后提交者收到冲突。
 
 ### 7.2 批量保存事务
@@ -301,9 +303,9 @@ UNIQUE (image_id, number)
 ```text
 BEGIN IMMEDIATE
 
-1. 查询 images.revision
-2. 与请求 baseRevision 比较，不一致则 ROLLBACK
-3. 校验所有 creates / updates / deletes
+1. 查询图片当前事件游标
+2. 校验所有 updates / deletes 的 annotations.version
+3. 幂等处理 creates，并检查标记 ID 冲突
 4. 检查保存后的标记总数不超过 50
 5. 按 next_annotation_number 分配新编号
 6. 执行插入、更新和删除

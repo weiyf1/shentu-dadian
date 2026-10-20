@@ -16,19 +16,27 @@ import AnnotationPanel from '@/components/AnnotationPanel.vue'
 import ImageRail from '@/components/ImageRail.vue'
 import ImageViewer from '@/components/ImageViewer.vue'
 import { formatDimensions } from '@/lib/format'
+import { getClientId } from '@/lib/clientIdentity'
 import {
   ApiRequestError,
   getImage,
   listImages,
   saveBatch,
 } from '@/services/api'
+import {
+  isRealtimeConnected,
+  onImageChanged,
+  realtimeSyncVersion,
+} from '@/services/realtime'
 import { useOperatorSession } from '@/stores/operatorSession'
 import { pushToast } from '@/composables/useToast'
 import type {
+  AnnotationConflict,
   Annotation,
   BatchDelete,
   BatchSavePayload,
   BatchUpdate,
+  ImageChangedEvent,
   ImageSummary,
   LocalAnnotation,
 } from '@/types/api'
@@ -47,9 +55,13 @@ const railLoading = ref(true)
 const errorMessage = ref('')
 const conflictMessage = ref('')
 const saving = ref(false)
+const remoteConflicts = ref<Map<string, AnnotationConflict>>(new Map())
 
 const originals = new Map<string, Annotation>()
 const deleted = new Map<string, BatchDelete>()
+let remoteRefreshSequence = 0
+let stopRealtimeListener: (() => void) | undefined
+let pollTimer: number | undefined
 
 const imageId = computed(() => String(route.params.imageId ?? ''))
 
@@ -83,10 +95,13 @@ const dirtyCount = computed(
   () => dirtyIds.value.size + deleted.size,
 )
 const isDirty = computed(() => dirtyCount.value > 0)
+const hasRemoteConflicts = computed(
+  () => remoteConflicts.value.size > 0,
+)
 
 const saveStatus = computed(() => {
   if (saving.value) return '正在保存…'
-  if (conflictMessage.value) return '保存冲突'
+  if (hasRemoteConflicts.value || conflictMessage.value) return '保存冲突'
   if (isDirty.value) return `有 ${dirtyCount.value} 处未保存修改`
   return '已保存'
 })
@@ -94,6 +109,8 @@ const saveStatus = computed(() => {
 function applySnapshot(snapshot: Annotation[], keepSelection = true): void {
   originals.clear()
   deleted.clear()
+  remoteConflicts.value = new Map()
+  conflictMessage.value = ''
   for (const annotation of snapshot) {
     originals.set(annotation.id, annotation)
   }
@@ -113,6 +130,14 @@ function applySnapshot(snapshot: Annotation[], keepSelection = true): void {
   }
 
   selectedId.value = sortedAnnotations.value[0]?.id ?? null
+}
+
+function refreshConflictMessage(): void {
+  if (remoteConflicts.value.size > 0) {
+    conflictMessage.value = `有 ${remoteConflicts.value.size} 个标记与远端修改冲突，请在右侧面板选择保留版本。`
+  } else {
+    conflictMessage.value = ''
+  }
 }
 
 async function loadRail(): Promise<void> {
@@ -154,9 +179,155 @@ async function loadImage(): Promise<void> {
   }
 }
 
+function cloneServerAnnotation(annotation: Annotation): LocalAnnotation {
+  return {
+    ...annotation,
+    author: { ...annotation.author },
+    isNew: false,
+  }
+}
+
+function mergeRemoteSnapshot(
+  snapshot: Annotation[],
+  remoteImage: ImageSummary,
+  actorName?: string,
+): void {
+  const serverMap = new Map(snapshot.map((annotation) => [annotation.id, annotation]))
+  const nextLocal: LocalAnnotation[] = []
+  const nextConflicts = new Map(remoteConflicts.value)
+  const seen = new Set<string>()
+
+  for (const local of annotations.value) {
+    if (local.isNew) {
+      nextLocal.push(local)
+      continue
+    }
+
+    const server = serverMap.get(local.id)
+    const base = originals.get(local.id)
+    const localDirty = !base || base.note !== local.note
+
+    if (server) {
+      seen.add(server.id)
+      if (!localDirty) {
+        nextLocal.push(cloneServerAnnotation(server))
+        originals.set(server.id, server)
+        nextConflicts.delete(server.id)
+      } else if (!base || server.version !== base.version) {
+        nextLocal.push(local)
+        nextConflicts.set(server.id, {
+          kind: 'updated',
+          remote: server,
+        })
+      } else {
+        nextLocal.push(local)
+        nextConflicts.delete(server.id)
+      }
+      continue
+    }
+
+    if (localDirty) {
+      nextLocal.push(local)
+      nextConflicts.set(local.id, {
+        kind: 'deleted',
+        remote: null,
+      })
+    } else {
+      originals.delete(local.id)
+      nextConflicts.delete(local.id)
+    }
+  }
+
+  for (const server of snapshot) {
+    if (seen.has(server.id)) continue
+
+    const pendingDelete = deleted.get(server.id)
+    if (pendingDelete) {
+      if (server.version !== pendingDelete.version) {
+        deleted.delete(server.id)
+        originals.set(server.id, server)
+        nextLocal.push(cloneServerAnnotation(server))
+        nextConflicts.set(server.id, {
+          kind: 'updated',
+          remote: server,
+        })
+      }
+      continue
+    }
+
+    originals.set(server.id, server)
+    nextLocal.push(cloneServerAnnotation(server))
+    nextConflicts.delete(server.id)
+  }
+
+  for (const annotationId of deleted.keys()) {
+    if (!serverMap.has(annotationId)) {
+      deleted.delete(annotationId)
+    }
+  }
+
+  annotations.value = nextLocal
+  remoteConflicts.value = nextConflicts
+  serverRevision.value = remoteImage.revision
+  image.value = {
+    ...remoteImage,
+    annotationCount: snapshot.length,
+  }
+  refreshConflictMessage()
+
+  if (
+    selectedId.value &&
+    !nextLocal.some((annotation) => annotation.id === selectedId.value)
+  ) {
+    selectedId.value = sortedAnnotations.value[0]?.id ?? null
+  }
+
+  const railImage = images.value.find((item) => item.id === remoteImage.id)
+  if (railImage) {
+    railImage.revision = remoteImage.revision
+    railImage.annotationCount = remoteImage.annotationCount
+    railImage.lastAnnotatedAt = remoteImage.lastAnnotatedAt
+  }
+
+  if (nextConflicts.size > 0) {
+    pushToast('远端修改与本地草稿存在冲突', 'error')
+  } else if (actorName) {
+    pushToast(`已同步 ${actorName} 的修改`, 'success')
+  }
+}
+
+async function refreshFromRemote(
+  actorName?: string,
+  announce = true,
+): Promise<void> {
+  const requestedId = imageId.value
+  if (!requestedId) return
+
+  const sequence = ++remoteRefreshSequence
+  try {
+    const detail = await getImage(requestedId)
+    if (
+      sequence !== remoteRefreshSequence ||
+      imageId.value !== requestedId
+    ) {
+      return
+    }
+    mergeRemoteSnapshot(detail.annotations, detail.image, actorName)
+  } catch {
+    if (announce) {
+      pushToast('实时同步失败，稍后会自动重试', 'error')
+    }
+  }
+}
+
 function addAnnotation(point: { x: number; y: number }): void {
   if (!currentOperator.value) {
     requestSession()
+    return
+  }
+
+  if (hasRemoteConflicts.value) {
+    pushToast('请先在右侧处理保存冲突', 'error')
     return
   }
 
@@ -185,7 +356,7 @@ function addAnnotation(point: { x: number; y: number }): void {
 
   annotations.value.push(annotation)
   selectedId.value = annotation.id
-  conflictMessage.value = ''
+  if (!hasRemoteConflicts.value) conflictMessage.value = ''
 }
 
 function updateNote(annotationId: string, note: string): void {
@@ -194,7 +365,7 @@ function updateNote(annotationId: string, note: string): void {
   )
   if (!annotation) return
   annotation.note = note
-  conflictMessage.value = ''
+  if (!hasRemoteConflicts.value) conflictMessage.value = ''
 }
 
 function deleteLocalAnnotation(annotationId: string): void {
@@ -214,7 +385,7 @@ function deleteLocalAnnotation(annotationId: string): void {
     (item) => item.id !== annotationId,
   )
   selectedId.value = sortedAnnotations.value[0]?.id ?? null
-  conflictMessage.value = ''
+  if (!hasRemoteConflicts.value) conflictMessage.value = ''
 }
 
 function buildPayload(): BatchSavePayload | null {
@@ -262,7 +433,7 @@ function buildPayload(): BatchSavePayload | null {
   }
 
   return {
-    baseRevision: serverRevision.value,
+    observedRevision: serverRevision.value,
     creates,
     updates,
     deletes,
@@ -316,18 +487,25 @@ async function save(): Promise<void> {
       currentRailImage.lastAnnotatedAt = response.savedAt
     }
 
-    pushToast('标记已保存', 'success')
+    pushToast(
+      response.concurrentChanges
+        ? '已合并其他同事的修改并保存'
+        : '标记已保存',
+      'success',
+    )
   } catch (error) {
     if (error instanceof ApiRequestError) {
       if (
-        error.code === 'IMAGE_REVISION_CONFLICT' ||
-        error.code === 'ANNOTATION_CONFLICT'
+        error.code === 'ANNOTATION_CONFLICT' ||
+        error.code === 'ANNOTATION_DELETED' ||
+        error.code === 'IMAGE_REVISION_CONFLICT'
       ) {
         conflictMessage.value =
-          error.code === 'IMAGE_REVISION_CONFLICT'
-            ? '这张图已被其他同事更新。你的草稿仍在，请重新加载最新标记后再处理。'
-            : '有标记已被其他同事修改。你的草稿仍在，请重新加载最新标记后再处理。'
+          error.code === 'ANNOTATION_DELETED'
+            ? '有标记已被其他同事删除。你的草稿仍在，请选择恢复远端版本或重新添加草稿。'
+            : '有标记已被其他同事修改。你的草稿仍在，请选择使用远端说明或保留本地草稿。'
         pushToast('保存冲突，本地草稿已保留', 'error')
+        void refreshFromRemote(undefined, false)
         return
       }
 
@@ -361,6 +539,79 @@ async function reloadLatest(): Promise<void> {
   await loadImage()
 }
 
+function resolveWithRemote(annotationId: string): void {
+  const conflict = remoteConflicts.value.get(annotationId)
+  if (!conflict) return
+
+  if (conflict.kind === 'updated' && conflict.remote) {
+    const index = annotations.value.findIndex(
+      (annotation) => annotation.id === annotationId,
+    )
+    if (index >= 0) {
+      annotations.value[index] = cloneServerAnnotation(conflict.remote)
+    }
+    originals.set(annotationId, conflict.remote)
+  } else {
+    annotations.value = annotations.value.filter(
+      (annotation) => annotation.id !== annotationId,
+    )
+    originals.delete(annotationId)
+  }
+
+  const nextConflicts = new Map(remoteConflicts.value)
+  nextConflicts.delete(annotationId)
+  remoteConflicts.value = nextConflicts
+  refreshConflictMessage()
+
+  if (!annotations.value.some((annotation) => annotation.id === selectedId.value)) {
+    selectedId.value = sortedAnnotations.value[0]?.id ?? null
+  }
+}
+
+function keepLocalConflict(annotationId: string): void {
+  const conflict = remoteConflicts.value.get(annotationId)
+  if (!conflict) return
+
+  const annotation = annotations.value.find(
+    (item) => item.id === annotationId,
+  )
+
+  if (conflict.kind === 'updated' && conflict.remote && annotation) {
+    originals.set(annotationId, conflict.remote)
+    annotation.version = conflict.remote.version
+    annotation.updatedAt = conflict.remote.updatedAt
+  } else if (annotation) {
+    const now = new Date().toISOString()
+    const operator = currentOperator.value
+    const replacement: LocalAnnotation = {
+      ...annotation,
+      id: crypto.randomUUID(),
+      number: 0,
+      version: 0,
+      createdAt: now,
+      updatedAt: now,
+      author: operator
+        ? {
+            id: operator.id,
+            displayName: operator.displayName,
+            color: operator.color,
+          }
+        : annotation.author,
+      isNew: true,
+    }
+    annotations.value = annotations.value.map((item) =>
+      item.id === annotationId ? replacement : item,
+    )
+    originals.delete(annotationId)
+    selectedId.value = replacement.id
+  }
+
+  const nextConflicts = new Map(remoteConflicts.value)
+  nextConflicts.delete(annotationId)
+  remoteConflicts.value = nextConflicts
+  refreshConflictMessage()
+}
+
 function handleBeforeUnload(event: BeforeUnloadEvent): void {
   if (!isDirty.value) return
   event.preventDefault()
@@ -374,6 +625,23 @@ function handleGlobalKeydown(event: KeyboardEvent): void {
   ) {
     event.preventDefault()
     void save()
+  }
+}
+
+function handleRealtimeEvent(event: ImageChangedEvent): void {
+  if (
+    event.imageId !== imageId.value ||
+    event.sourceClientId === getClientId()
+  ) {
+    return
+  }
+
+  void refreshFromRemote(event.actor.displayName)
+}
+
+function handleWindowFocus(): void {
+  if (!isRealtimeConnected.value && image.value) {
+    void refreshFromRemote(undefined, false)
   }
 }
 
@@ -391,23 +659,41 @@ onBeforeRouteUpdate((to, from) => {
 watch(
   imageId,
   () => {
+    remoteRefreshSequence += 1
     selectedId.value = null
     annotations.value = []
     image.value = null
+    remoteConflicts.value = new Map()
     void loadImage()
   },
   { immediate: true },
 )
 
+watch(realtimeSyncVersion, () => {
+  if (image.value) {
+    void refreshFromRemote(undefined, false)
+  }
+})
+
 onMounted(() => {
   void loadRail()
+  stopRealtimeListener = onImageChanged(handleRealtimeEvent)
+  pollTimer = window.setInterval(() => {
+    if (!isRealtimeConnected.value && image.value) {
+      void refreshFromRemote(undefined, false)
+    }
+  }, 8_000)
   window.addEventListener('beforeunload', handleBeforeUnload)
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('focus', handleWindowFocus)
 })
 
 onBeforeUnmount(() => {
+  stopRealtimeListener?.()
+  window.clearInterval(pollTimer)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('focus', handleWindowFocus)
 })
 </script>
 
@@ -447,7 +733,9 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="button button-primary save-button"
-            :disabled="!isDirty || saving || loading"
+            :disabled="
+              !isDirty || saving || loading || hasRemoteConflicts
+            "
             @click="save"
           >
             {{ saving ? '保存中…' : '保存修改' }}
@@ -497,10 +785,13 @@ onBeforeUnmount(() => {
       :annotations="sortedAnnotations"
       :selected-id="selectedId"
       :dirty-ids="dirtyIds"
+      :conflicts="remoteConflicts"
       :max-count="50"
       @select="selectedId = $event"
       @update-note="updateNote"
       @delete="deleteLocalAnnotation"
+      @resolve-remote="resolveWithRemote"
+      @keep-local="keepLocalConflict"
     />
   </main>
 </template>

@@ -5,6 +5,7 @@ import { RouterView } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import SessionDialog from '@/components/SessionDialog.vue'
 import ToastHost from '@/components/ToastHost.vue'
+import { startRealtime } from '@/services/realtime'
 import { useOperatorSession } from '@/stores/operatorSession'
 
 const { currentOperator, sessionPromptVersion } = useOperatorSession()
@@ -25,6 +26,7 @@ watch(sessionPromptVersion, () => {
 })
 
 onMounted(() => {
+  startRealtime()
   if (!currentOperator.value) {
     openSession(true)
   }

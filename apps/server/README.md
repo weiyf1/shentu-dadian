@@ -35,6 +35,7 @@ npm start          # 运行编译后的服务
 - `PATCH /api/v1/annotations/:annotationId`：修改说明
 - `DELETE /api/v1/annotations/:annotationId`：删除标记
 - `POST /api/v1/images/:imageId/annotations/batch`：批量保存
+- `GET /api/v1/events`：Server-Sent Events 实时变化流
 
 配置项见 `.env.example`。开发时复制为 `.env` 即可覆盖默认值。
 

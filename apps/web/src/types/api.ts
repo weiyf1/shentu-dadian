@@ -37,6 +37,11 @@ export interface LocalAnnotation extends Annotation {
   isNew?: boolean
 }
 
+export interface AnnotationConflict {
+  kind: 'updated' | 'deleted'
+  remote: Annotation | null
+}
+
 export interface ImageListResponse {
   items: ImageSummary[]
   total: number
@@ -71,7 +76,8 @@ export interface BatchDelete {
 }
 
 export interface BatchSavePayload {
-  baseRevision: number
+  observedRevision?: number
+  baseRevision?: number
   creates: BatchCreate[]
   updates: BatchUpdate[]
   deletes: BatchDelete[]
@@ -81,6 +87,32 @@ export interface BatchSaveResponse {
   imageRevision: number
   annotations: Annotation[]
   savedAt: string
+  concurrentChanges: boolean
+  changed: {
+    created: string[]
+    updated: string[]
+    deleted: string[]
+  }
+}
+
+export interface ImageChangedEvent {
+  eventId: number
+  type: 'image.changed'
+  imageId: string
+  revision: number
+  annotationCount: number
+  lastAnnotatedAt: string | null
+  actor: {
+    id: string
+    displayName: string
+    color: string
+  }
+  sourceClientId: string | null
+  changed: {
+    created: string[]
+    updated: string[]
+    deleted: string[]
+  }
 }
 
 export interface ApiErrorBody {

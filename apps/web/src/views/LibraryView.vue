@@ -4,7 +4,13 @@ import { useRouter } from 'vue-router'
 
 import UploadDialog from '@/components/UploadDialog.vue'
 import { formatDateTime, formatDimensions } from '@/lib/format'
+import { getClientId } from '@/lib/clientIdentity'
 import { ApiRequestError, listImages, resolveAssetUrl } from '@/services/api'
+import {
+  isRealtimeConnected,
+  onImageChanged,
+  realtimeSyncVersion,
+} from '@/services/realtime'
 import type { ImageSummary } from '@/types/api'
 
 const router = useRouter()
@@ -15,12 +21,16 @@ const errorMessage = ref('')
 const search = ref('')
 const uploadOpen = ref(false)
 let searchTimer: number | undefined
+let pollTimer: number | undefined
+let stopRealtimeListener: (() => void) | undefined
 let requestSequence = 0
 
-async function loadImages(): Promise<void> {
+async function loadImages(silent = false): Promise<void> {
   const sequence = ++requestSequence
-  loading.value = true
-  errorMessage.value = ''
+  if (!silent) {
+    loading.value = true
+    errorMessage.value = ''
+  }
 
   try {
     const response = await listImages(search.value)
@@ -35,7 +45,7 @@ async function loadImages(): Promise<void> {
         : '图片库加载失败，请确认后端已经启动'
   } finally {
     if (sequence === requestSequence) {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 }
@@ -47,6 +57,10 @@ watch(search, () => {
   }, 260)
 })
 
+watch(realtimeSyncVersion, () => {
+  void loadImages(true)
+})
+
 function handleUploaded(image: ImageSummary): void {
   uploadOpen.value = false
   void router.push(`/images/${image.id}`)
@@ -54,10 +68,29 @@ function handleUploaded(image: ImageSummary): void {
 
 onMounted(() => {
   void loadImages()
+  stopRealtimeListener = onImageChanged((event) => {
+    if (event.sourceClientId === getClientId()) return
+
+    const image = images.value.find((item) => item.id === event.imageId)
+    if (image) {
+      image.revision = event.revision
+      image.annotationCount = event.annotationCount
+      image.lastAnnotatedAt = event.lastAnnotatedAt
+    } else {
+      void loadImages(true)
+    }
+  })
+  pollTimer = window.setInterval(() => {
+    if (!isRealtimeConnected.value) {
+      void loadImages(true)
+    }
+  }, 15_000)
 })
 
 onBeforeUnmount(() => {
   window.clearTimeout(searchTimer)
+  window.clearInterval(pollTimer)
+  stopRealtimeListener?.()
 })
 </script>
 
@@ -133,7 +166,11 @@ onBeforeUnmount(() => {
       <div v-else-if="errorMessage" class="library-error">
         <strong>图片库暂时打不开</strong>
         <p>{{ errorMessage }}</p>
-        <button class="button button-primary" type="button" @click="loadImages">
+        <button
+          class="button button-primary"
+          type="button"
+          @click="loadImages()"
+        >
           重新加载
         </button>
       </div>

@@ -31,6 +31,7 @@ npm run dev
 - `docs/API.md`：前后端接口契约
 - `docs/DATABASE.md`：SQLite 表结构、约束和并发设计
 - `docs/VIEWPORT_ALGORITHM.md`：图片缩放、平移和标记定位算法
+- `docs/REALTIME_CONCURRENCY.md`：细粒度并发保存与 SSE 实时同步设计
 
 ## 接口文档
 
@@ -39,3 +40,5 @@ npm run dev
 数据库设计见 [`docs/DATABASE.md`](docs/DATABASE.md)。
 
 画布坐标算法见 [`docs/VIEWPORT_ALGORITHM.md`](docs/VIEWPORT_ALGORITHM.md)。
+
+并发与实时同步演进方案见 [`docs/REALTIME_CONCURRENCY.md`](docs/REALTIME_CONCURRENCY.md)。

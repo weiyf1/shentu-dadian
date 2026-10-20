@@ -10,9 +10,11 @@ import { loadConfig, type AppConfig } from './config.js'
 import { openDatabase } from './db/database.js'
 import { seedDemoData } from './db/seed.js'
 import { ApiError } from './errors.js'
+import { ImageEventHub } from './realtime/event-hub.js'
 import { annotationRoutes } from './routes/annotations.js'
 import { healthRoutes } from './routes/health.js'
 import { imageRoutes } from './routes/images.js'
+import { realtimeRoutes } from './routes/realtime.js'
 import { sessionRoutes } from './routes/session.js'
 
 export interface BuildAppOptions {
@@ -44,8 +46,10 @@ export async function buildApp(
         : randomUUID()
     },
   })
+  const eventHub = new ImageEventHub()
 
   app.decorate('db', database)
+  app.decorate('events', eventHub)
 
   await app.register(cors, {
     origin: config.corsOrigins,
@@ -144,11 +148,13 @@ export async function buildApp(
   await app.register(healthRoutes)
   await app.register(sessionRoutes)
   await app.register(annotationRoutes)
+  await app.register(realtimeRoutes)
   await app.register(async (api) => {
     await imageRoutes(api, uploadsDir)
   })
 
   app.addHook('onClose', async () => {
+    eventHub.close()
     database.close()
   })
 

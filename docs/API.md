@@ -1,7 +1,8 @@
 # 审图打点 API 设计
 
 接口版本：`v1`  
-状态：前后端均已接入，后端接口通过自动化测试。
+状态：前后端均已接入，后端接口通过自动化测试。  
+并发粒度与实时同步的下一阶段设计见 [`REALTIME_CONCURRENCY.md`](REALTIME_CONCURRENCY.md)。
 
 ## 1. 基本约定
 
@@ -35,15 +36,16 @@ VITE_API_BASE_URL=http://127.0.0.1:3001/api/v1
 
 1. 前端首次进入时要求输入姓名。
 2. 调用 `POST /api/v1/session` 获取或创建操作人。
-3. 前端把返回的 `operator.id` 和 `operator.displayName` 保存在 `localStorage`。
-4. 所有写接口必须携带请求头：
+3. 前端把返回的操作人档案保存在 `localStorage` 的操作人目录中。
+4. 当前标签页把正在使用的 `operator.id` 保存在 `sessionStorage`，因此同一浏览器的不同标签页可以使用不同操作人。
+5. 所有写接口必须携带请求头：
 
 ```http
 X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 ```
 
-5. 查询接口不要求该请求头。
-6. 写接口返回 `OPERATOR_REQUIRED` 时，前端清除失效的本地身份并重新让用户输入姓名。
+6. 查询接口不要求该请求头。
+7. 写接口返回 `OPERATOR_REQUIRED` 时，前端清除失效档案并重新让用户选择或输入姓名。
 
 说明：这是协作身份标识，不是安全认证。知道 ID 的人可以冒用身份；本项目不把它当作登录鉴权。
 
@@ -162,6 +164,7 @@ X-Request-Id: 9d10511d-8a26-4f09-a144-a9eb61c73293
     "details": {
       "annotationId": "9fd9b6c9-60ba-4c26-a3a7-7ba372d17700",
       "currentVersion": 3,
+      "currentNote": "远端已经修改后的说明",
       "currentImageRevision": 8
     }
   }
@@ -184,6 +187,7 @@ X-Request-Id: 9d10511d-8a26-4f09-a144-a9eb61c73293
 | PATCH | `/api/v1/annotations/:annotationId` | 修改标记说明 | 是 |
 | DELETE | `/api/v1/annotations/:annotationId` | 删除标记 | 是 |
 | POST | `/api/v1/images/:imageId/annotations/batch` | 批量保存全部草稿变更 | 是 |
+| GET | `/api/v1/events` | SSE 实时变化事件 | 否 |
 
 前端正式保存时统一使用批量接口，单条接口用于调试、测试和后续扩展。
 
@@ -469,7 +473,7 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 
 ```json
 {
-  "baseRevision": 7,
+  "observedRevision": 7,
   "creates": [
     {
       "id": "a60957af-307f-4cdc-8d40-f2a7c07e46b2",
@@ -496,11 +500,13 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 
 规则：
 
-- `baseRevision` 必填，必须等于打开图片时或上次保存后取得的 `image.revision`。
+- `observedRevision` 可选，表示客户端最后看到的图片版本，不用于拒绝不同标记的并发保存。
+- 兼容旧客户端，仍可传 `baseRevision`，语义与 `observedRevision` 相同。
 - `creates`、`updates`、`deletes` 可省略，默认空数组；但三者合计至少一项。
 - 单次合计最多 50 项，保存后的标记总数不能超过 50。
 - 所有变更在同一个 SQLite 事务中提交，任何一项失败则全部回滚。
 - 任一新标记 ID 已存在时，按单条新增的幂等规则处理。
+- 修改和删除只校验对应标记的 `version`，不会因为其他人修改了别的标记而失败。
 - 成功后图片 `revision` 只递增一次。
 
 响应 `200`：
@@ -540,34 +546,69 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
       "updatedAt": "2026-10-20T09:25:00.000Z"
     }
   ],
-  "savedAt": "2026-10-20T09:25:00.000Z"
+  "savedAt": "2026-10-20T09:25:00.000Z",
+  "concurrentChanges": true,
+  "changed": {
+    "created": ["a60957af-307f-4cdc-8d40-f2a7c07e46b2"],
+    "updated": ["9fd9b6c9-60ba-4c26-a3a7-7ba372d17700"],
+    "deleted": []
+  }
 }
 ```
 
 响应返回保存后的完整快照，前端可以直接替换本地状态，不需要再请求一次详情。
 
-#### 图片版本冲突
+`concurrentChanges = true` 表示保存时客户端看到的图片版本已经落后，但服务端仍成功合并了互不冲突的标记。`changed` 只包含本次实际产生的变化，幂等重试的新增不会重复列出。
 
-当 `baseRevision` 不等于服务端当前版本时返回 `409 IMAGE_REVISION_CONFLICT`：
+#### 标记版本冲突
 
-```json
-{
-  "error": {
-    "code": "IMAGE_REVISION_CONFLICT",
-    "message": "图片标注已被其他同事更新，请刷新后再保存",
-    "requestId": "9d10511d-8a26-4f09-a144-a9eb61c73293",
-    "details": {
-      "currentRevision": 9
-    }
+同一标记在打开后被别人修改时返回 `409 ANNOTATION_CONFLICT`，`details` 包含冲突标记 ID、当前版本和当前说明。
+
+同一标记已被别人删除时返回 `409 ANNOTATION_DELETED`。
+
+#### GET `/api/v1/events`
+
+建立 Server-Sent Events 连接：
+
+```http
+GET /api/v1/events?clientId=<tab-uuid>
+Accept: text/event-stream
+```
+
+连接成功：
+
+```text
+event: connected
+data: {"serverTime":"2026-10-20T10:00:00.000Z"}
+```
+
+图片变化：
+
+```text
+event: image.changed
+id: 106
+data: {
+  "eventId": 106,
+  "type": "image.changed",
+  "imageId": "4fa8fd31-1863-4e38-b20f-1d3f923ddcc3",
+  "revision": 9,
+  "annotationCount": 5,
+  "lastAnnotatedAt": "2026-10-20T10:00:02.000Z",
+  "actor": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "displayName": "李雷",
+    "color": "#059669"
+  },
+  "sourceClientId": "d6520e2d-6f59-47be-8d95-18b22c845cf0",
+  "changed": {
+    "created": ["a60957af-307f-4cdc-8d40-f2a7c07e46b2"],
+    "updated": [],
+    "deleted": []
   }
 }
 ```
 
-前端应提示用户并重新拉取图片详情，不能直接覆盖。
-
-#### 标记版本冲突
-
-同一标记在打开后被别人修改时返回 `409 ANNOTATION_CONFLICT`，`details` 包含冲突标记 ID 和当前版本。
+事件只在 SQLite 事务提交成功后发送。前端收到事件后重新拉取图片详情，并按 `base/server/local` 三方合并；`sourceClientId` 与当前标签页一致时忽略自己的回声。
 
 ## 7. 错误码
 
@@ -578,8 +619,8 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 | 404 | `NOT_FOUND` | 路由不存在 |
 | 404 | `IMAGE_NOT_FOUND` | 图片不存在 |
 | 404 | `ANNOTATION_NOT_FOUND` | 标记不存在 |
-| 409 | `IMAGE_REVISION_CONFLICT` | 图片版本过期 |
 | 409 | `ANNOTATION_CONFLICT` | 标记版本过期 |
+| 409 | `ANNOTATION_DELETED` | 标记已被其他同事删除 |
 | 409 | `ANNOTATION_LIMIT_REACHED` | 标记数量超过 50 |
 | 409 | `ANNOTATION_ID_CONFLICT` | 标记 ID 内容冲突 |
 | 413 | `IMAGE_TOO_LARGE` | 上传图片超过 10 MB |
@@ -610,11 +651,12 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 
 ### 8.1 首次进入
 
-1. 检查 `localStorage` 中是否有 `operatorId`。
-2. 没有则弹出姓名输入框。
-3. 调用 `POST /api/v1/session`。
-4. 保存 `operator.id` 和 `operator.displayName`，后续请求自动带 `X-Operator-Id`。
-5. 写请求返回 `OPERATOR_REQUIRED` 时，清除本地身份并重新执行上述流程。
+1. 从 `sessionStorage` 读取当前标签页的操作人 ID。
+2. 当前标签页没有身份时，展示 `localStorage` 中已保存的操作人列表。
+3. 用户可以选择已有操作人，或输入新姓名并调用 `POST /api/v1/session`。
+4. 操作人档案写入 `localStorage`，当前标签页身份写入 `sessionStorage`。
+5. 后续请求自动带 `X-Operator-Id`；其他标签页保持自己的身份不变。
+6. 写请求返回 `OPERATOR_REQUIRED` 时，清除失效档案并重新执行上述流程。
 
 ### 8.2 打开图片
 
@@ -635,9 +677,10 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 ### 8.4 保存
 
 1. 将本地状态与打开时的服务端快照比较，生成 `creates`、`updates`、`deletes`。
-2. 携带原始 `baseRevision` 调用批量接口。
+2. 携带最后看到的 `observedRevision` 调用批量接口。
 3. 成功后用响应中的 `annotations` 和 `imageRevision` 替换本地状态。
-4. 收到 `409` 时保留本地草稿，提示冲突并重新加载服务端最新数据。
+4. 收到其他标签页的 `image.changed` 事件后拉取最新详情并执行三方合并。
+5. 只有同一标记版本冲突时保留双方版本并让用户选择。
 
 ```mermaid
 sequenceDiagram
@@ -646,9 +689,9 @@ sequenceDiagram
   participant DB as SQLite
 
   Vue->>API: POST /images/:id/annotations/batch
-  Note right of Vue: 携带 baseRevision 和本地草稿差异
+  Note right of Vue: 携带 observedRevision 和本地草稿差异
   API->>DB: BEGIN IMMEDIATE
-  API->>DB: 校验图片版本、标记版本和数量
+  API->>DB: 校验改动标记的 version 和数量
   alt 校验通过
     API->>DB: 应用 creates / updates / deletes
     API->>DB: 递增 image revision
@@ -657,7 +700,7 @@ sequenceDiagram
     Vue->>Vue: 替换本地状态，清除脏标记
   else 版本冲突
     API->>DB: ROLLBACK
-    API-->>Vue: 409 IMAGE_REVISION_CONFLICT
+    API-->>Vue: 409 ANNOTATION_CONFLICT 或 ANNOTATION_DELETED
     Vue->>API: GET /images/:id
     API-->>Vue: 最新 revision 和 annotations
     Vue->>Vue: 保留草稿并提示用户处理冲突
@@ -696,7 +739,7 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:3001/api/v1/images'
 
 ```powershell
 $body = @{
-  baseRevision = 7
+  observedRevision = 7
   creates = @(
     @{
       id = 'a60957af-307f-4cdc-8d40-f2a7c07e46b2'

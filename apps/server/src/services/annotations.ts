@@ -44,10 +44,17 @@ export interface AnnotationUpdateInput {
 }
 
 export interface BatchInput {
-  baseRevision: number
+  baseRevision?: number | undefined
+  observedRevision?: number | undefined
   creates: AnnotationCreateInput[]
   updates: Array<AnnotationUpdateInput & { id: string }>
   deletes: Array<{ id: string; version: number }>
+}
+
+export interface BatchChangeSet {
+  created: string[]
+  updated: string[]
+  deleted: string[]
 }
 
 function toAnnotation(record: AnnotationViewRecord): Annotation {
@@ -237,6 +244,7 @@ export function updateAnnotation(
         {
           annotationId,
           currentVersion: record.version,
+          currentNote: record.note,
           currentImageRevision: image.revision,
         },
       )
@@ -257,7 +265,12 @@ export function updateAnnotation(
       throw conflict(
         'ANNOTATION_CONFLICT',
         '该标记已被其他同事修改，请刷新后重试',
-        { annotationId, currentImageRevision: image.revision },
+        {
+          annotationId,
+          currentVersion: record.version,
+          currentNote: record.note,
+          currentImageRevision: image.revision,
+        },
       )
     }
 
@@ -300,6 +313,7 @@ export function deleteAnnotation(
         {
           annotationId,
           currentVersion: record.version,
+          currentNote: record.note,
           currentImageRevision: image.revision,
         },
       )
@@ -328,6 +342,8 @@ export function saveBatch(
   imageRevision: number
   annotations: Annotation[]
   savedAt: string
+  concurrentChanges: boolean
+  changed: BatchChangeSet
 } {
   return withImmediateTransaction(database, () => {
     const image = getImageRecord(database, imageId)
@@ -335,18 +351,21 @@ export function saveBatch(
       throw notFound('IMAGE_NOT_FOUND', '图片不存在')
     }
 
-    if (image.revision !== input.baseRevision) {
-      throw conflict(
-        'IMAGE_REVISION_CONFLICT',
-        '图片标注已被其他同事更新，请刷新后再保存',
-        { currentRevision: image.revision },
-      )
-    }
+    const observedRevision = input.observedRevision ?? input.baseRevision
+    const concurrentChanges =
+      observedRevision !== undefined && observedRevision !== image.revision
 
     const updates = input.updates.map((item) => {
       const record = getAnnotationRecord(database, item.id)
       if (!record || record.image_id !== imageId) {
-        throw notFound('ANNOTATION_NOT_FOUND', `标记 ${item.id} 不存在`)
+        throw conflict(
+          'ANNOTATION_DELETED',
+          '该标记已被其他同事删除',
+          {
+            annotationId: item.id,
+            currentImageRevision: image.revision,
+          },
+        )
       }
       if (record.version !== item.version) {
         throw conflict(
@@ -355,6 +374,7 @@ export function saveBatch(
           {
             annotationId: item.id,
             currentVersion: record.version,
+            currentNote: record.note,
             currentImageRevision: image.revision,
           },
         )
@@ -365,7 +385,14 @@ export function saveBatch(
     const deletes = input.deletes.map((item) => {
       const record = getAnnotationRecord(database, item.id)
       if (!record || record.image_id !== imageId) {
-        throw notFound('ANNOTATION_NOT_FOUND', `标记 ${item.id} 不存在`)
+        throw conflict(
+          'ANNOTATION_DELETED',
+          '该标记已被其他同事删除',
+          {
+            annotationId: item.id,
+            currentImageRevision: image.revision,
+          },
+        )
       }
       if (record.version !== item.version) {
         throw conflict(
@@ -374,6 +401,7 @@ export function saveBatch(
           {
             annotationId: item.id,
             currentVersion: record.version,
+            currentNote: record.note,
             currentImageRevision: image.revision,
           },
         )
@@ -472,6 +500,12 @@ export function saveBatch(
       imageRevision: changed ? image.revision + 1 : image.revision,
       annotations: listAnnotations(database, imageId),
       savedAt: new Date().toISOString(),
+      concurrentChanges,
+      changed: {
+        created: creates.map((item) => item.id),
+        updated: updates.map((item) => item.id),
+        deleted: deletes.map((item) => item.id),
+      },
     }
   })
 }

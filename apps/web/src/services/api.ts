@@ -7,7 +7,8 @@ import type {
   ImageSummary,
   SessionResponse,
 } from '@/types/api'
-import { readStoredOperator } from '@/lib/operatorStorage'
+import { readActiveOperator } from '@/lib/operatorStorage'
+import { getClientId } from '@/lib/clientIdentity'
 
 const configuredBaseUrl =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
@@ -43,11 +44,12 @@ function endpoint(path: string): string {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  const operator = readStoredOperator()
+  const operator = readActiveOperator()
 
   if (operator) {
     headers.set('X-Operator-Id', operator.id)
   }
+  headers.set('X-Client-Id', getClientId())
 
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')

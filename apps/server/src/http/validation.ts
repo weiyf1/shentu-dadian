@@ -87,7 +87,8 @@ const batchDeleteSchema = z.object({
 
 export const batchSaveSchema = z
   .object({
-    baseRevision: z.number().int().positive(),
+    baseRevision: z.number().int().positive().optional(),
+    observedRevision: z.number().int().positive().optional(),
     creates: z.array(batchCreateSchema).default([]),
     updates: z.array(batchUpdateSchema).default([]),
     deletes: z.array(batchDeleteSchema).default([]),
