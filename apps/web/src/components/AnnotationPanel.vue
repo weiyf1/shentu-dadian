@@ -95,7 +95,11 @@ function requestDelete(): void {
   }
 
   const label = `标记 #${selected.value.number}`
-  if (window.confirm(`确定删除${label}吗？`)) {
+  if (
+    window.confirm(
+      `确定删除${label}吗？删除后会立即同步给其他同事。`,
+    )
+  ) {
     emit('delete', selected.value.id)
   }
 }

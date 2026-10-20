@@ -238,6 +238,14 @@ test('different tabs can use different operators from the same browser', async (
     .click()
   await expect(page.locator('.operator-name')).toHaveText('甲操作员')
   await expect(secondPage.locator('.operator-name')).toHaveText('乙操作员')
+
+  await page.evaluate(() => {
+    localStorage.removeItem('shentu.operators.v2')
+  })
+  await page.reload()
+  await secondPage.reload()
+  await expect(page.locator('.operator-name')).toHaveText('甲操作员')
+  await expect(secondPage.locator('.operator-name')).toHaveText('乙操作员')
 })
 
 test('saved changes stream to another tab while preserving local drafts', async ({
@@ -322,4 +330,18 @@ test('saved changes stream to another tab while preserving local drafts', async 
   await expect(
     page.getByText('实时乙的本地草稿', { exact: true }),
   ).toBeVisible({ timeout: 2_000 })
+
+  await page.bringToFront()
+  await page
+    .locator('.annotation-panel')
+    .getByRole('button', { name: /实时新增标记/ })
+    .click()
+  page.once('dialog', async (dialog) => {
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: '删除此标记' }).click()
+
+  await expect(
+    secondPage.getByText('实时新增标记', { exact: true }),
+  ).not.toBeVisible({ timeout: 2_000 })
 })

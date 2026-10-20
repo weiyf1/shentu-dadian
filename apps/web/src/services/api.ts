@@ -129,6 +129,16 @@ export function deleteImage(
   })
 }
 
+export function deleteAnnotation(
+  annotationId: string,
+  version: number,
+): Promise<{ deletedId: string; imageRevision: number }> {
+  return request<{ deletedId: string; imageRevision: number }>(
+    `/annotations/${annotationId}?version=${version}`,
+    { method: 'DELETE' },
+  )
+}
+
 export async function uploadImage(
   file: File,
   title: string,

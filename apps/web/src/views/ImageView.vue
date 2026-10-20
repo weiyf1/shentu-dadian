@@ -20,6 +20,7 @@ import { formatDimensions } from '@/lib/format'
 import { getClientId } from '@/lib/clientIdentity'
 import {
   ApiRequestError,
+  deleteAnnotation,
   deleteImage,
   getImage,
   listImages,
@@ -36,7 +37,6 @@ import { pushToast } from '@/composables/useToast'
 import type {
   AnnotationConflict,
   Annotation,
-  BatchDelete,
   BatchSavePayload,
   BatchUpdate,
   ImageChangedEvent,
@@ -60,10 +60,10 @@ const errorMessage = ref('')
 const conflictMessage = ref('')
 const saving = ref(false)
 const deleting = ref(false)
+const deletingAnnotationId = ref<string | null>(null)
 const remoteConflicts = ref<Map<string, AnnotationConflict>>(new Map())
 
 const originals = new Map<string, Annotation>()
-const deleted = new Map<string, BatchDelete>()
 let remoteRefreshSequence = 0
 let stopRealtimeListener: (() => void) | undefined
 let stopDeletedListener: (() => void) | undefined
@@ -99,7 +99,7 @@ const dirtyIds = computed(() => {
 })
 
 const dirtyCount = computed(
-  () => dirtyIds.value.size + deleted.size,
+  () => dirtyIds.value.size,
 )
 const isDirty = computed(() => dirtyCount.value > 0)
 const hasRemoteConflicts = computed(
@@ -122,7 +122,6 @@ const saveStatus = computed(() => {
 
 function applySnapshot(snapshot: Annotation[], keepSelection = true): void {
   originals.clear()
-  deleted.clear()
   remoteConflicts.value = new Map()
   conflictMessage.value = ''
   for (const annotation of snapshot) {
@@ -255,29 +254,9 @@ function mergeRemoteSnapshot(
   for (const server of snapshot) {
     if (seen.has(server.id)) continue
 
-    const pendingDelete = deleted.get(server.id)
-    if (pendingDelete) {
-      if (server.version !== pendingDelete.version) {
-        deleted.delete(server.id)
-        originals.set(server.id, server)
-        nextLocal.push(cloneServerAnnotation(server))
-        nextConflicts.set(server.id, {
-          kind: 'updated',
-          remote: server,
-        })
-      }
-      continue
-    }
-
     originals.set(server.id, server)
     nextLocal.push(cloneServerAnnotation(server))
     nextConflicts.delete(server.id)
-  }
-
-  for (const annotationId of deleted.keys()) {
-    if (!serverMap.has(annotationId)) {
-      deleted.delete(annotationId)
-    }
   }
 
   annotations.value = nextLocal
@@ -389,7 +368,7 @@ function updateNote(annotationId: string, note: string): void {
   if (!hasRemoteConflicts.value) conflictMessage.value = ''
 }
 
-function deleteLocalAnnotation(annotationId: string): void {
+async function deleteLocalAnnotation(annotationId: string): Promise<void> {
   const annotation = annotations.value.find(
     (item) => item.id === annotationId,
   )
@@ -402,18 +381,70 @@ function deleteLocalAnnotation(annotationId: string): void {
     return
   }
 
-  if (!annotation.isNew) {
-    deleted.set(annotation.id, {
-      id: annotation.id,
-      version: annotation.version,
-    })
+  if (annotation.isNew) {
+    annotations.value = annotations.value.filter(
+      (item) => item.id !== annotationId,
+    )
+    selectedId.value = sortedAnnotations.value[0]?.id ?? null
+    if (!hasRemoteConflicts.value) conflictMessage.value = ''
+    return
   }
 
-  annotations.value = annotations.value.filter(
-    (item) => item.id !== annotationId,
-  )
-  selectedId.value = sortedAnnotations.value[0]?.id ?? null
-  if (!hasRemoteConflicts.value) conflictMessage.value = ''
+  if (deletingAnnotationId.value) return
+  deletingAnnotationId.value = annotationId
+
+  try {
+    const response = await deleteAnnotation(
+      annotationId,
+      annotation.version,
+    )
+    annotations.value = annotations.value.filter(
+      (item) => item.id !== annotationId,
+    )
+    originals.delete(annotationId)
+    serverRevision.value = response.imageRevision
+    if (image.value) {
+      image.value = {
+        ...image.value,
+        revision: response.imageRevision,
+        annotationCount: annotations.value.length,
+        lastAnnotatedAt: new Date().toISOString(),
+      }
+    }
+    const railImage = images.value.find(
+      (item) => item.id === image.value?.id,
+    )
+    if (railImage) {
+      railImage.revision = response.imageRevision
+      railImage.annotationCount = annotations.value.length
+      railImage.lastAnnotatedAt = new Date().toISOString()
+    }
+
+    const nextConflicts = new Map(remoteConflicts.value)
+    nextConflicts.delete(annotationId)
+    remoteConflicts.value = nextConflicts
+    refreshConflictMessage()
+    selectedId.value = sortedAnnotations.value[0]?.id ?? null
+    pushToast('标记已删除', 'success')
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      if (
+        error.code === 'ANNOTATION_CONFLICT' ||
+        error.code === 'ANNOTATION_DELETED'
+      ) {
+        pushToast(error.message, 'error')
+        void refreshFromRemote(undefined, false)
+        return
+      }
+
+      pushToast(error.message, 'error')
+      return
+    }
+
+    pushToast('删除标记失败，请稍后重试', 'error')
+  } finally {
+    deletingAnnotationId.value = null
+  }
 }
 
 function buildPayload(): BatchSavePayload | null {
@@ -455,8 +486,7 @@ function buildPayload(): BatchSavePayload | null {
     }
   }
 
-  const deletes = [...deleted.values()]
-  if (creates.length + updates.length + deletes.length === 0) {
+  if (creates.length + updates.length === 0) {
     return null
   }
 
@@ -464,7 +494,7 @@ function buildPayload(): BatchSavePayload | null {
     observedRevision: serverRevision.value,
     creates,
     updates,
-    deletes,
+    deletes: [],
   }
 }
 

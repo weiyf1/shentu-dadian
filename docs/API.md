@@ -37,7 +37,7 @@ VITE_API_BASE_URL=http://127.0.0.1:3001/api/v1
 1. 前端首次进入时要求输入姓名。
 2. 调用 `POST /api/v1/session` 获取或创建操作人。
 3. 前端把返回的操作人档案保存在 `localStorage` 的操作人目录中。
-4. 当前标签页把正在使用的 `operator.id` 保存在 `sessionStorage`，因此同一浏览器的不同标签页可以使用不同操作人。
+4. 当前标签页把完整操作人对象保存在独立 `sessionStorage`，不依赖共享目录查找当前身份；因此同一浏览器的不同标签页可以使用不同操作人。
 5. 所有写接口必须携带请求头：
 
 ```http
@@ -197,7 +197,7 @@ X-Request-Id: 9d10511d-8a26-4f09-a144-a9eb61c73293
 | POST | `/api/v1/images/:imageId/annotations/batch` | 批量保存全部草稿变更 | 是 |
 | GET | `/api/v1/events` | SSE 实时变化事件 | 否 |
 
-前端正式保存时统一使用批量接口，单条接口用于调试、测试和后续扩展。
+前端新增和说明修改使用批量接口；已有标记的删除在用户确认后立即调用单条删除接口并广播事件，不再等待“保存修改”。
 
 ## 4. 会话接口
 
@@ -485,6 +485,8 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 
 只有标记创建人可以删除。非创建人调用时返回 `403 ANNOTATION_DELETE_FORBIDDEN`，`details` 包含标记 ID、作者 ID 和当前操作人 ID。
 
+删除提交成功后立即发布 `image.changed`，其他正在查看的标签页会在 2 秒验收窗口内移除该标记。
+
 响应 `200`：
 
 ```json
@@ -705,10 +707,10 @@ data: {
 
 ### 8.1 首次进入
 
-1. 从 `sessionStorage` 读取当前标签页的操作人 ID。
+1. 从 `sessionStorage` 读取当前标签页的完整操作人对象。
 2. 当前标签页没有身份时，展示 `localStorage` 中已保存的操作人列表。
 3. 用户可以选择已有操作人，或输入新姓名并调用 `POST /api/v1/session`。
-4. 操作人档案写入 `localStorage`，当前标签页身份写入 `sessionStorage`。
+4. 操作人档案写入 `localStorage` 目录，完整操作人对象写入当前标签页 `sessionStorage`。
 5. 后续请求自动带 `X-Operator-Id`；其他标签页保持自己的身份不变。
 6. 写请求返回 `OPERATOR_REQUIRED` 时，清除失效档案并重新执行上述流程。
 
@@ -730,11 +732,12 @@ data: {
 
 ### 8.4 保存
 
-1. 将本地状态与打开时的服务端快照比较，生成 `creates`、`updates`、`deletes`。
+1. 将本地状态与打开时的服务端快照比较，生成 `creates` 和 `updates`。
 2. 携带最后看到的 `observedRevision` 调用批量接口。
 3. 成功后用响应中的 `annotations` 和 `imageRevision` 替换本地状态。
-4. 收到其他标签页的 `image.changed` 事件后拉取最新详情并执行三方合并。
-5. 只有同一标记版本冲突时保留双方版本并让用户选择。
+4. 删除已有标记时立即调用单条删除接口，成功后更新本地快照。
+5. 收到其他标签页的 `image.changed` 事件后拉取最新详情并执行三方合并。
+6. 只有同一标记版本冲突时保留双方版本并让用户选择。
 
 ```mermaid
 sequenceDiagram

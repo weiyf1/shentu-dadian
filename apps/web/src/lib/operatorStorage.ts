@@ -2,7 +2,8 @@ import type { Operator } from '@/types/api'
 
 const LEGACY_OPERATOR_KEY = 'shentu.operator'
 export const OPERATOR_DIRECTORY_KEY = 'shentu.operators.v2'
-export const ACTIVE_OPERATOR_KEY = 'shentu.activeOperatorId.v2'
+const ACTIVE_OPERATOR_KEY = 'shentu.activeOperator.v3'
+const LEGACY_ACTIVE_OPERATOR_KEY = 'shentu.activeOperatorId.v2'
 
 function isOperator(value: unknown): value is Operator {
   if (!value || typeof value !== 'object') return false
@@ -48,30 +49,49 @@ export function removeOperatorFromDirectory(operatorId: string): Operator[] {
 }
 
 export function writeActiveOperator(operator: Operator): void {
+  sessionStorage.setItem(ACTIVE_OPERATOR_KEY, JSON.stringify(operator))
   saveOperatorToDirectory(operator)
-  sessionStorage.setItem(ACTIVE_OPERATOR_KEY, operator.id)
 }
 
 export function clearActiveOperator(): void {
   sessionStorage.removeItem(ACTIVE_OPERATOR_KEY)
+  sessionStorage.removeItem(LEGACY_ACTIVE_OPERATOR_KEY)
 }
 
 export function readActiveOperator(): Operator | null {
   try {
-    const activeId = sessionStorage.getItem(ACTIVE_OPERATOR_KEY)
-    if (activeId) {
+    const activeRaw = sessionStorage.getItem(ACTIVE_OPERATOR_KEY)
+    if (activeRaw) {
+      const parsed: unknown = JSON.parse(activeRaw)
+      if (isOperator(parsed)) return parsed
+    }
+
+    const legacyActiveId = sessionStorage.getItem(
+      LEGACY_ACTIVE_OPERATOR_KEY,
+    )
+    if (legacyActiveId) {
       const operator = readOperatorDirectory().find(
-        (item) => item.id === activeId,
+        (item) => item.id === legacyActiveId,
       )
-      if (operator) return operator
+      if (operator) {
+        sessionStorage.setItem(
+          ACTIVE_OPERATOR_KEY,
+          JSON.stringify(operator),
+        )
+        sessionStorage.removeItem(LEGACY_ACTIVE_OPERATOR_KEY)
+        return operator
+      }
     }
 
     const legacyRaw = localStorage.getItem(LEGACY_OPERATOR_KEY)
     if (legacyRaw) {
       const parsed: unknown = JSON.parse(legacyRaw)
       if (isOperator(parsed)) {
+        sessionStorage.setItem(
+          ACTIVE_OPERATOR_KEY,
+          JSON.stringify(parsed),
+        )
         saveOperatorToDirectory(parsed)
-        sessionStorage.setItem(ACTIVE_OPERATOR_KEY, parsed.id)
         localStorage.removeItem(LEGACY_OPERATOR_KEY)
         return parsed
       }
