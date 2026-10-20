@@ -373,6 +373,13 @@ function deleteLocalAnnotation(annotationId: string): void {
     (item) => item.id === annotationId,
   )
   if (!annotation) return
+  if (
+    !annotation.isNew &&
+    annotation.author.id !== currentOperator.value?.id
+  ) {
+    pushToast('只能删除自己创建的标记', 'error')
+    return
+  }
 
   if (!annotation.isNew) {
     deleted.set(annotation.id, {
@@ -786,6 +793,7 @@ onBeforeUnmount(() => {
       :selected-id="selectedId"
       :dirty-ids="dirtyIds"
       :conflicts="remoteConflicts"
+      :current-operator-id="currentOperator?.id ?? ''"
       :max-count="50"
       @select="selectedId = $event"
       @update-note="updateNote"

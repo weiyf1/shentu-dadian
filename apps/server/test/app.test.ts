@@ -272,6 +272,75 @@ test('annotation CRUD persists the snapshot and checks versions', async () => {
   }
 })
 
+test('only the annotation author can delete the annotation', async () => {
+  const context = await createContext()
+  const imageId = '12121212-1212-4212-8212-121212121212'
+  const annotationId = '34343434-3434-4434-8434-343434343434'
+
+  try {
+    const author = await createSession(context.app, '作者甲')
+    const otherUser = await createSession(context.app, '作者乙')
+    insertImage(context.app, { id: imageId })
+
+    const created = await context.app.inject({
+      method: 'POST',
+      url: `/api/v1/images/${imageId}/annotations`,
+      headers: { 'x-operator-id': author.id },
+      payload: {
+        id: annotationId,
+        x: 20,
+        y: 30,
+        note: '这条标记属于作者甲',
+      },
+    })
+    assert.equal(created.statusCode, 201)
+
+    const singleDelete = await context.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/annotations/${annotationId}?version=1`,
+      headers: { 'x-operator-id': otherUser.id },
+    })
+    assert.equal(singleDelete.statusCode, 403)
+    assert.equal(
+      singleDelete.json().error.code,
+      'ANNOTATION_DELETE_FORBIDDEN',
+    )
+    assert.equal(
+      singleDelete.json().error.details.authorId,
+      author.id,
+    )
+
+    const batchDelete = await context.app.inject({
+      method: 'POST',
+      url: `/api/v1/images/${imageId}/annotations/batch`,
+      headers: { 'x-operator-id': otherUser.id },
+      payload: {
+        deletes: [{ id: annotationId, version: 1 }],
+      },
+    })
+    assert.equal(batchDelete.statusCode, 403)
+    assert.equal(
+      batchDelete.json().error.code,
+      'ANNOTATION_DELETE_FORBIDDEN',
+    )
+
+    const detail = await context.app.inject({
+      method: 'GET',
+      url: `/api/v1/images/${imageId}`,
+    })
+    assert.equal(detail.json().annotations.length, 1)
+
+    const ownDelete = await context.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/annotations/${annotationId}?version=1`,
+      headers: { 'x-operator-id': author.id },
+    })
+    assert.equal(ownDelete.statusCode, 200)
+  } finally {
+    await closeContext(context)
+  }
+})
+
 test('batch save merges stale revisions and conflicts only on the same annotation', async () => {
   const context = await createContext()
   const imageId = '88888888-8888-4888-8888-888888888888'

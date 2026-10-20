@@ -1,6 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite'
 
-import { badRequest, conflict, notFound } from '../errors.js'
+import {
+  badRequest,
+  conflict,
+  forbidden,
+  notFound,
+} from '../errors.js'
 import { roundCoordinate } from '../http/validation.js'
 import type {
   Annotation,
@@ -293,6 +298,7 @@ export function updateAnnotation(
 export function deleteAnnotation(
   database: DatabaseSync,
   annotationId: string,
+  operator: Operator,
   version: number,
 ): { deletedId: string; imageRevision: number } {
   return withImmediateTransaction(database, () => {
@@ -304,6 +310,18 @@ export function deleteAnnotation(
     const image = getImageRecord(database, record.image_id)
     if (!image) {
       throw notFound('IMAGE_NOT_FOUND', '图片不存在')
+    }
+
+    if (record.author_id !== operator.id) {
+      throw forbidden(
+        'ANNOTATION_DELETE_FORBIDDEN',
+        '只能删除自己创建的标记',
+        {
+          annotationId,
+          authorId: record.author_id,
+          operatorId: operator.id,
+        },
+      )
     }
 
     if (record.version !== version) {
@@ -403,6 +421,17 @@ export function saveBatch(
             currentVersion: record.version,
             currentNote: record.note,
             currentImageRevision: image.revision,
+          },
+        )
+      }
+      if (record.author_id !== operator.id) {
+        throw forbidden(
+          'ANNOTATION_DELETE_FORBIDDEN',
+          '只能删除自己创建的标记',
+          {
+            annotationId: item.id,
+            authorId: record.author_id,
+            operatorId: operator.id,
           },
         )
       }

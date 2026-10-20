@@ -12,6 +12,7 @@ const props = defineProps<{
   selectedId: string | null
   dirtyIds: Set<string>
   conflicts: Map<string, AnnotationConflict>
+  currentOperatorId: string
   maxCount?: number
 }>()
 
@@ -36,6 +37,14 @@ const selectedIsDirty = computed(
 )
 const selectedConflict = computed(() =>
   props.selectedId ? props.conflicts.get(props.selectedId) : undefined,
+)
+const canDeleteSelected = computed(
+  () =>
+    Boolean(
+      selected.value &&
+        (selected.value.isNew ||
+          selected.value.author.id === props.currentOperatorId),
+    ),
 )
 
 watch(
@@ -69,6 +78,9 @@ function noteInput(event: Event): void {
 
 function requestDelete(): void {
   if (!selected.value) return
+  if (!canDeleteSelected.value) {
+    return
+  }
   if (selected.value.isNew) {
     emit('delete', selected.value.id)
     return
@@ -231,12 +243,16 @@ function annotationNumber(annotation: LocalAnnotation): string {
       </p>
 
       <button
+        v-if="canDeleteSelected"
         type="button"
         class="delete-button"
         @click="requestDelete"
       >
         删除此标记
       </button>
+      <p v-else class="delete-restriction">
+        只能删除自己创建的标记
+      </p>
     </section>
 
     <section v-else class="editor-placeholder">
@@ -562,6 +578,12 @@ function annotationNumber(annotation: LocalAnnotation): string {
 
 .delete-button:hover {
   background: var(--danger-soft);
+}
+
+.delete-restriction {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .editor-placeholder {

@@ -102,6 +102,7 @@ export async function annotationRoutes(app: FastifyInstance): Promise<void> {
       const result = deleteAnnotation(
         app.db,
         annotationId,
+        request.operator!,
         query.version,
       )
       if (imageRow) {

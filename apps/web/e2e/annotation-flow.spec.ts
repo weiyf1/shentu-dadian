@@ -37,6 +37,12 @@ test('operator can enter, open an image, annotate, save and reload', async ({
   await expect(
     page.getByRole('heading', { name: '秋季新品主图' }),
   ).toBeVisible()
+  await expect(
+    page.getByText('只能删除自己创建的标记'),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: '删除此标记' }),
+  ).not.toBeVisible()
 
   const stage = page.getByRole('application')
   await expect(stage).toBeVisible()
@@ -125,6 +131,9 @@ test('operator can enter, open an image, annotate, save and reload', async ({
   )
   await expect(
     page.getByText('新标记', { exact: true }).first(),
+  ).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: '删除此标记' }),
   ).toBeVisible()
 
   const noteField = page.getByLabel('标记说明')

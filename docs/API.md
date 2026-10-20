@@ -81,7 +81,8 @@ imageY = (pointerY - containerTop - panY) / scale
 - 每个标记必须有 1～200 字的说明，前后空白会被裁掉。
 - 标记编号由服务端分配，在同一张图内单调递增，删除后不复用。
 - 标记按 `number` 升序返回。
-- 当前版本允许所有操作人编辑和删除任意标记；`author` 始终表示创建人。
+- 所有操作人可以修改任意标记说明；只有标记创建人可以删除该标记。
+- `author` 始终表示创建人，删除权限按 `author_id` 校验。
 - 标记位置不可拖动，说明可以编辑。
 
 ### 1.6 请求 ID
@@ -454,6 +455,8 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 
 查询参数 `version` 必填，为调用方最后看到的标记版本。
 
+只有标记创建人可以删除。非创建人调用时返回 `403 ANNOTATION_DELETE_FORBIDDEN`，`details` 包含标记 ID、作者 ID 和当前操作人 ID。
+
 响应 `200`：
 
 ```json
@@ -507,6 +510,7 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 - 所有变更在同一个 SQLite 事务中提交，任何一项失败则全部回滚。
 - 任一新标记 ID 已存在时，按单条新增的幂等规则处理。
 - 修改和删除只校验对应标记的 `version`，不会因为其他人修改了别的标记而失败。
+- `deletes` 中的每个标记都必须属于当前操作人；任一项不属于时整个事务回滚并返回 `403`。
 - 成功后图片 `revision` 只递增一次。
 
 响应 `200`：
@@ -619,6 +623,7 @@ data: {
 | 404 | `NOT_FOUND` | 路由不存在 |
 | 404 | `IMAGE_NOT_FOUND` | 图片不存在 |
 | 404 | `ANNOTATION_NOT_FOUND` | 标记不存在 |
+| 403 | `ANNOTATION_DELETE_FORBIDDEN` | 当前操作人不是标记创建人，不能删除 |
 | 409 | `ANNOTATION_CONFLICT` | 标记版本过期 |
 | 409 | `ANNOTATION_DELETED` | 标记已被其他同事删除 |
 | 409 | `ANNOTATION_LIMIT_REACHED` | 标记数量超过 50 |
