@@ -38,11 +38,15 @@ test('operator can enter, open an image, annotate, save and reload', async ({
     page.getByRole('heading', { name: '秋季新品主图' }),
   ).toBeVisible()
   await expect(
+    page.getByRole('button', { name: '删除图片' }),
+  ).not.toBeVisible()
+  await expect(
     page.getByText('只能删除自己创建的标记'),
   ).toBeVisible()
   await expect(
     page.getByRole('button', { name: '删除此标记' }),
   ).not.toBeVisible()
+  await expect(page.getByLabel('标记说明')).not.toBeEditable()
 
   const stage = page.getByRole('application')
   await expect(stage).toBeVisible()
@@ -138,6 +142,7 @@ test('operator can enter, open an image, annotate, save and reload', async ({
 
   const noteField = page.getByLabel('标记说明')
   await expect(noteField).toBeVisible()
+  await expect(noteField).toBeEditable()
   await noteField.fill('E2E：按钮区域需要微调')
 
   const saveButton = page.getByRole('button', { name: '保存修改' })
@@ -176,7 +181,18 @@ test('operator can upload an image from the library', async ({ page }) => {
   await expect(
     page.getByRole('heading', { name: '浏览器上传验收图' }),
   ).toBeVisible()
+  await expect(page.getByText(/上传者 上传验收员/)).toBeVisible()
   await expect(page.getByRole('application')).toBeVisible()
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('浏览器上传验收图')
+    await dialog.accept()
+  })
+  await page.getByRole('button', { name: '删除图片' }).click()
+  await expect(page).toHaveURL(/\/$/)
+  await expect(
+    page.getByRole('link', { name: /浏览器上传验收图/ }),
+  ).not.toBeVisible()
 })
 
 test('different tabs can use different operators from the same browser', async ({
@@ -244,6 +260,23 @@ test('saved changes stream to another tab while preserving local drafts', async 
   await secondPage.goto(imageUrl)
   await expect(secondPage.getByRole('application')).toBeVisible()
 
+  await secondPage.bringToFront()
+  const secondStage = secondPage.getByRole('application')
+  const secondStageBox = await secondStage.boundingBox()
+  expect(secondStageBox).not.toBeNull()
+  const secondImageBox = await secondPage
+    .locator('.image-content')
+    .boundingBox()
+  expect(secondImageBox).not.toBeNull()
+  await secondStage.click({
+    position: {
+      x: secondImageBox!.x - secondStageBox!.x + secondImageBox!.width * 0.6,
+      y: secondImageBox!.y - secondStageBox!.y + secondImageBox!.height * 0.75,
+    },
+  })
+  await expect(
+    secondPage.getByText('新标记', { exact: true }).first(),
+  ).toBeVisible()
   const localDraft = secondPage.getByLabel('标记说明')
   await expect(localDraft).toBeVisible()
   await localDraft.fill('实时乙的本地草稿')
@@ -273,29 +306,19 @@ test('saved changes stream to another tab while preserving local drafts', async 
   ).toBeVisible({ timeout: 2_000 })
   await expect(localDraft).toHaveValue('实时乙的本地草稿')
 
+  await page.bringToFront()
   await page
     .locator('.annotation-panel')
     .getByRole('button', { name: /主标题和背景对比不够/ })
     .click()
-  await page.getByLabel('标记说明').fill('实时甲修改了同一条标记')
-  await page.getByRole('button', { name: '保存修改' }).click()
-  await expect(page.getByText('标记已保存').last()).toBeVisible()
-
+  await expect(page.getByLabel('标记说明')).not.toBeEditable()
   await expect(
-    secondPage.getByText('远端已修改此标记', { exact: true }),
-  ).toBeVisible({ timeout: 2_000 })
-  await expect(localDraft).toHaveValue('实时乙的本地草稿')
-
-  await secondPage
-    .getByRole('button', { name: '保留我的草稿' })
-    .click()
-  await expect(
-    secondPage.getByText('远端已修改此标记', { exact: true }),
-  ).not.toBeVisible()
-  await secondPage.getByRole('button', { name: '保存修改' }).click()
-  await expect(
-    secondPage.getByText('标记已保存'),
+    page.getByText('只能修改自己创建的标记说明'),
   ).toBeVisible()
+
+  await secondPage.bringToFront()
+  await secondPage.getByRole('button', { name: '保存修改' }).click()
+  await expect(secondPage.getByText('标记已保存')).toBeVisible()
   await expect(
     page.getByText('实时乙的本地草稿', { exact: true }),
   ).toBeVisible({ timeout: 2_000 })

@@ -35,3 +35,24 @@ export function publishImageChanged(
     changed: options.changed,
   })
 }
+
+export function publishImageDeleted(
+  hub: ImageEventHub,
+  options: {
+    imageId: string
+    actor: Operator
+    sourceClientId: string | null
+  },
+): void {
+  hub.publish({
+    type: 'image.deleted',
+    imageId: options.imageId,
+    actor: {
+      id: options.actor.id,
+      displayName: options.actor.displayName,
+      color: options.actor.color,
+    },
+    sourceClientId: options.sourceClientId,
+    deletedAt: new Date().toISOString(),
+  })
+}

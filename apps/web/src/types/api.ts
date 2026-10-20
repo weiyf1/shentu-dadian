@@ -15,6 +15,11 @@ export interface ImageSummary {
   annotationCount: number
   createdAt: string
   lastAnnotatedAt: string | null
+  uploadedBy: {
+    id: string
+    displayName: string
+    color: string
+  } | null
 }
 
 export interface Annotation {
@@ -113,6 +118,19 @@ export interface ImageChangedEvent {
     updated: string[]
     deleted: string[]
   }
+}
+
+export interface ImageDeletedEvent {
+  eventId: number
+  type: 'image.deleted'
+  imageId: string
+  actor: {
+    id: string
+    displayName: string
+    color: string
+  }
+  sourceClientId: string | null
+  deletedAt: string
 }
 
 export interface ApiErrorBody {

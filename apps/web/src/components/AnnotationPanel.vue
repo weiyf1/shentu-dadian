@@ -46,6 +46,14 @@ const canDeleteSelected = computed(
           selected.value.author.id === props.currentOperatorId),
     ),
 )
+const canEditSelected = computed(
+  () =>
+    Boolean(
+      selected.value &&
+        (selected.value.isNew ||
+          selected.value.author.id === props.currentOperatorId),
+    ),
+)
 
 watch(
   () => props.selectedId,
@@ -68,7 +76,7 @@ watch(
 )
 
 function noteInput(event: Event): void {
-  if (!selected.value) return
+  if (!selected.value || !canEditSelected.value) return
   emit(
     'updateNote',
     selected.value.id,
@@ -222,6 +230,8 @@ function annotationNumber(annotation: LocalAnnotation): string {
         ref="editorElement"
         class="text-area"
         :value="selected.note"
+        :readonly="!canEditSelected"
+        :class="{ 'is-readonly': !canEditSelected }"
         rows="4"
         maxlength="200"
         placeholder="描述这里的问题，例如：价格字体偏小，需要放大"
@@ -240,6 +250,10 @@ function annotationNumber(annotation: LocalAnnotation): string {
 
       <p v-if="!selected.note.trim()" class="note-warning">
         保存前需要填写说明。
+      </p>
+
+      <p v-if="!canEditSelected" class="edit-restriction">
+        只能修改自己创建的标记说明
       </p>
 
       <button
@@ -561,6 +575,18 @@ function annotationNumber(annotation: LocalAnnotation): string {
   margin: 8px 0 0;
   color: var(--danger);
   font-size: 10px;
+}
+
+.text-area.is-readonly {
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  cursor: default;
+}
+
+.edit-restriction {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 9px;
 }
 
 .delete-button {

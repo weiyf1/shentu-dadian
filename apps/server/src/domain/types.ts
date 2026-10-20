@@ -15,6 +15,11 @@ export interface ImageSummary {
   annotationCount: number
   createdAt: string
   lastAnnotatedAt: string | null
+  uploadedBy: {
+    id: string
+    displayName: string
+    color: string
+  } | null
 }
 
 export interface Annotation {
@@ -58,6 +63,9 @@ export interface ImageSummaryRecord {
   annotation_count: number
   created_at: string
   last_annotated_at: string | null
+  uploaded_by_id: string | null
+  uploaded_by_name: string | null
+  uploaded_by_color: string | null
 }
 
 export interface AnnotationRecord {

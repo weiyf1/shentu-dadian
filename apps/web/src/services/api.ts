@@ -121,6 +121,14 @@ export function getImage(imageId: string): Promise<ImageDetailResponse> {
   return request<ImageDetailResponse>(`/images/${imageId}`)
 }
 
+export function deleteImage(
+  imageId: string,
+): Promise<{ deletedId: string }> {
+  return request<{ deletedId: string }>(`/images/${imageId}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function uploadImage(
   file: File,
   title: string,

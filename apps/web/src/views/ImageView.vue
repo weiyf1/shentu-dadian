@@ -10,6 +10,7 @@ import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
   useRoute,
+  useRouter,
 } from 'vue-router'
 
 import AnnotationPanel from '@/components/AnnotationPanel.vue'
@@ -19,6 +20,7 @@ import { formatDimensions } from '@/lib/format'
 import { getClientId } from '@/lib/clientIdentity'
 import {
   ApiRequestError,
+  deleteImage,
   getImage,
   listImages,
   saveBatch,
@@ -26,6 +28,7 @@ import {
 import {
   isRealtimeConnected,
   onImageChanged,
+  onImageDeleted,
   realtimeSyncVersion,
 } from '@/services/realtime'
 import { useOperatorSession } from '@/stores/operatorSession'
@@ -42,6 +45,7 @@ import type {
 } from '@/types/api'
 
 const route = useRoute()
+const router = useRouter()
 const { currentOperator, clearOperator, requestSession } =
   useOperatorSession()
 
@@ -55,13 +59,16 @@ const railLoading = ref(true)
 const errorMessage = ref('')
 const conflictMessage = ref('')
 const saving = ref(false)
+const deleting = ref(false)
 const remoteConflicts = ref<Map<string, AnnotationConflict>>(new Map())
 
 const originals = new Map<string, Annotation>()
 const deleted = new Map<string, BatchDelete>()
 let remoteRefreshSequence = 0
 let stopRealtimeListener: (() => void) | undefined
+let stopDeletedListener: (() => void) | undefined
 let pollTimer: number | undefined
+let bypassUnsavedGuard = false
 
 const imageId = computed(() => String(route.params.imageId ?? ''))
 
@@ -97,6 +104,13 @@ const dirtyCount = computed(
 const isDirty = computed(() => dirtyCount.value > 0)
 const hasRemoteConflicts = computed(
   () => remoteConflicts.value.size > 0,
+)
+const canDeleteImage = computed(
+  () =>
+    Boolean(
+      image.value?.uploadedBy &&
+        image.value.uploadedBy.id === currentOperator.value?.id,
+    ),
 )
 
 const saveStatus = computed(() => {
@@ -364,6 +378,13 @@ function updateNote(annotationId: string, note: string): void {
     (item) => item.id === annotationId,
   )
   if (!annotation) return
+  if (
+    !annotation.isNew &&
+    annotation.author.id !== currentOperator.value?.id
+  ) {
+    pushToast('只能修改自己创建的标记说明', 'error')
+    return
+  }
   annotation.note = note
   if (!hasRemoteConflicts.value) conflictMessage.value = ''
 }
@@ -532,6 +553,37 @@ async function save(): Promise<void> {
   }
 }
 
+async function deleteCurrentImage(): Promise<void> {
+  const currentImage = image.value
+  if (!currentImage || !canDeleteImage.value || deleting.value) return
+
+  const suffix = isDirty.value ? '当前未保存的草稿也会丢失。' : ''
+  if (
+    !window.confirm(
+      `确定删除图片“${currentImage.title}”及其全部 ${annotations.value.length} 个标记吗？${suffix}`,
+    )
+  ) {
+    return
+  }
+
+  deleting.value = true
+  try {
+    await deleteImage(currentImage.id)
+    bypassUnsavedGuard = true
+    pushToast('图片已删除', 'success')
+    await router.replace('/')
+  } catch (error) {
+    pushToast(
+      error instanceof ApiRequestError
+        ? error.message
+        : '图片删除失败，请稍后重试',
+      'error',
+    )
+  } finally {
+    deleting.value = false
+  }
+}
+
 async function reloadLatest(): Promise<void> {
   if (
     isDirty.value &&
@@ -646,6 +698,23 @@ function handleRealtimeEvent(event: ImageChangedEvent): void {
   void refreshFromRemote(event.actor.displayName)
 }
 
+function handleImageDeletedEvent(event: {
+  imageId: string
+  actor: { displayName: string }
+  sourceClientId: string | null
+}): void {
+  if (
+    event.imageId !== imageId.value ||
+    event.sourceClientId === getClientId()
+  ) {
+    return
+  }
+
+  bypassUnsavedGuard = true
+  pushToast(`${event.actor.displayName} 删除了这张图片`, 'info')
+  void router.replace('/')
+}
+
 function handleWindowFocus(): void {
   if (!isRealtimeConnected.value && image.value) {
     void refreshFromRemote(undefined, false)
@@ -653,6 +722,7 @@ function handleWindowFocus(): void {
 }
 
 onBeforeRouteLeave(() => {
+  if (bypassUnsavedGuard) return true
   if (!isDirty.value) return true
   return window.confirm('有未保存的标记修改，确定离开吗？')
 })
@@ -685,6 +755,7 @@ watch(realtimeSyncVersion, () => {
 onMounted(() => {
   void loadRail()
   stopRealtimeListener = onImageChanged(handleRealtimeEvent)
+  stopDeletedListener = onImageDeleted(handleImageDeletedEvent)
   pollTimer = window.setInterval(() => {
     if (!isRealtimeConnected.value && image.value) {
       void refreshFromRemote(undefined, false)
@@ -697,6 +768,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopRealtimeListener?.()
+  stopDeletedListener?.()
   window.clearInterval(pollTimer)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('keydown', handleGlobalKeydown)
@@ -724,6 +796,8 @@ onBeforeUnmount(() => {
           {{ formatDimensions(image.width, image.height) }}
           <span>·</span>
           {{ annotations.length }} 个标记
+          <span>·</span>
+          上传者 {{ image.uploadedBy?.displayName ?? '系统导入' }}
         </div>
 
         <div class="save-area">
@@ -737,6 +811,15 @@ onBeforeUnmount(() => {
             <i></i>
             {{ saveStatus }}
           </span>
+          <button
+            v-if="canDeleteImage"
+            type="button"
+            class="button button-ghost delete-image-button"
+            :disabled="deleting || saving"
+            @click="deleteCurrentImage"
+          >
+            {{ deleting ? '删除中…' : '删除图片' }}
+          </button>
           <button
             type="button"
             class="button button-primary save-button"
@@ -924,6 +1007,15 @@ onBeforeUnmount(() => {
 
 .save-button {
   min-width: 96px;
+}
+
+.delete-image-button {
+  color: var(--danger);
+}
+
+.delete-image-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--border));
+  background: var(--danger-soft);
 }
 
 .viewer-surface,

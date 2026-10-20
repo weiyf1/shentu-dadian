@@ -242,6 +242,18 @@ export function updateAnnotation(
       throw notFound('IMAGE_NOT_FOUND', '图片不存在')
     }
 
+    if (record.author_id !== operator.id) {
+      throw forbidden(
+        'ANNOTATION_EDIT_FORBIDDEN',
+        '只能修改自己创建的标记说明',
+        {
+          annotationId,
+          authorId: record.author_id,
+          operatorId: operator.id,
+        },
+      )
+    }
+
     if (record.version !== input.version) {
       throw conflict(
         'ANNOTATION_CONFLICT',
@@ -385,6 +397,17 @@ export function saveBatch(
           },
         )
       }
+      if (record.author_id !== operator.id) {
+        throw forbidden(
+          'ANNOTATION_EDIT_FORBIDDEN',
+          '只能修改自己创建的标记说明',
+          {
+            annotationId: item.id,
+            authorId: record.author_id,
+            operatorId: operator.id,
+          },
+        )
+      }
       if (record.version !== item.version) {
         throw conflict(
           'ANNOTATION_CONFLICT',
@@ -412,6 +435,17 @@ export function saveBatch(
           },
         )
       }
+      if (record.author_id !== operator.id) {
+        throw forbidden(
+          'ANNOTATION_DELETE_FORBIDDEN',
+          '只能删除自己创建的标记',
+          {
+            annotationId: item.id,
+            authorId: record.author_id,
+            operatorId: operator.id,
+          },
+        )
+      }
       if (record.version !== item.version) {
         throw conflict(
           'ANNOTATION_CONFLICT',
@@ -421,17 +455,6 @@ export function saveBatch(
             currentVersion: record.version,
             currentNote: record.note,
             currentImageRevision: image.revision,
-          },
-        )
-      }
-      if (record.author_id !== operator.id) {
-        throw forbidden(
-          'ANNOTATION_DELETE_FORBIDDEN',
-          '只能删除自己创建的标记',
-          {
-            annotationId: item.id,
-            authorId: record.author_id,
-            operatorId: operator.id,
           },
         )
       }

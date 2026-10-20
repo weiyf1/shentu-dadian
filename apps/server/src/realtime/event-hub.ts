@@ -23,6 +23,30 @@ export interface ImageChangedEvent extends ImageChangedEventInput {
   eventId: number
 }
 
+export interface ImageDeletedEventInput {
+  type: 'image.deleted'
+  imageId: string
+  actor: {
+    id: string
+    displayName: string
+    color: string
+  }
+  sourceClientId: string | null
+  deletedAt: string
+}
+
+export interface ImageDeletedEvent extends ImageDeletedEventInput {
+  eventId: number
+}
+
+export type RealtimeEventInput =
+  | ImageChangedEventInput
+  | ImageDeletedEventInput
+
+export type RealtimeEvent =
+  | ImageChangedEvent
+  | ImageDeletedEvent
+
 interface SseClient {
   reply: FastifyReply
   clientId: string | null
@@ -69,11 +93,11 @@ export class ImageEventHub {
     })
   }
 
-  publish(input: ImageChangedEventInput): ImageChangedEvent {
-    const event: ImageChangedEvent = {
+  publish(input: RealtimeEventInput): RealtimeEvent {
+    const event: RealtimeEvent = {
       ...input,
       eventId: this.nextEventId,
-    }
+    } as RealtimeEvent
     this.nextEventId += 1
 
     this.writeToAll(

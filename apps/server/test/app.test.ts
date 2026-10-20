@@ -272,7 +272,7 @@ test('annotation CRUD persists the snapshot and checks versions', async () => {
   }
 })
 
-test('only the annotation author can delete the annotation', async () => {
+test('only the annotation author can edit and delete the annotation', async () => {
   const context = await createContext()
   const imageId = '12121212-1212-4212-8212-121212121212'
   const annotationId = '34343434-3434-4434-8434-343434343434'
@@ -294,6 +294,50 @@ test('only the annotation author can delete the annotation', async () => {
       },
     })
     assert.equal(created.statusCode, 201)
+
+    const forbiddenUpdate = await context.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/annotations/${annotationId}`,
+      headers: { 'x-operator-id': otherUser.id },
+      payload: {
+        note: '其他用户尝试修改',
+        version: 1,
+      },
+    })
+    assert.equal(forbiddenUpdate.statusCode, 403)
+    assert.equal(
+      forbiddenUpdate.json().error.code,
+      'ANNOTATION_EDIT_FORBIDDEN',
+    )
+
+    const batchUpdate = await context.app.inject({
+      method: 'POST',
+      url: `/api/v1/images/${imageId}/annotations/batch`,
+      headers: { 'x-operator-id': otherUser.id },
+      payload: {
+        updates: [
+          { id: annotationId, version: 1, note: '批量修改别人的标记' },
+        ],
+      },
+    })
+    assert.equal(batchUpdate.statusCode, 403)
+    assert.equal(
+      batchUpdate.json().error.code,
+      'ANNOTATION_EDIT_FORBIDDEN',
+    )
+
+    const ownUpdate = await context.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/annotations/${annotationId}`,
+      headers: { 'x-operator-id': author.id },
+      payload: {
+        note: '作者修改自己的说明',
+        version: 1,
+      },
+    })
+    assert.equal(ownUpdate.statusCode, 200)
+    assert.equal(ownUpdate.json().annotation.note, '作者修改自己的说明')
+    assert.equal(ownUpdate.json().annotation.version, 2)
 
     const singleDelete = await context.app.inject({
       method: 'DELETE',
@@ -329,10 +373,11 @@ test('only the annotation author can delete the annotation', async () => {
       url: `/api/v1/images/${imageId}`,
     })
     assert.equal(detail.json().annotations.length, 1)
+    assert.equal(detail.json().annotations[0].note, '作者修改自己的说明')
 
     const ownDelete = await context.app.inject({
       method: 'DELETE',
-      url: `/api/v1/annotations/${annotationId}?version=1`,
+      url: `/api/v1/annotations/${annotationId}?version=2`,
       headers: { 'x-operator-id': author.id },
     })
     assert.equal(ownDelete.statusCode, 200)
@@ -474,10 +519,13 @@ test('image upload accepts a valid image and rejects SVG', async () => {
       width: number
       height: number
       title: string
+      uploadedBy: { id: string; displayName: string }
     }
     assert.equal(uploaded.width, 40)
     assert.equal(uploaded.height, 30)
     assert.equal(uploaded.title, '上传测试图')
+    assert.equal(uploaded.uploadedBy.id, operator.id)
+    assert.equal(uploaded.uploadedBy.displayName, '赵敏')
 
     const content = await fetch(
       `${baseUrl}/api/v1/images/${uploaded.id}/content`,
@@ -511,6 +559,35 @@ test('image upload accepts a valid image and rejects SVG', async () => {
       ((await invalid.json()) as { error: { code: string } }).error.code,
       'UNSUPPORTED_IMAGE_TYPE',
     )
+
+    const otherUser = await createSession(context.app, '其他操作人')
+    const forbiddenDelete = await fetch(
+      `${baseUrl}/api/v1/images/${uploaded.id}`,
+      {
+        method: 'DELETE',
+        headers: { 'X-Operator-Id': otherUser.id },
+      },
+    )
+    assert.equal(forbiddenDelete.status, 403)
+    assert.equal(
+      ((await forbiddenDelete.json()) as { error: { code: string } }).error
+        .code,
+      'IMAGE_DELETE_FORBIDDEN',
+    )
+
+    const ownDelete = await fetch(
+      `${baseUrl}/api/v1/images/${uploaded.id}`,
+      {
+        method: 'DELETE',
+        headers: { 'X-Operator-Id': operator.id },
+      },
+    )
+    assert.equal(ownDelete.status, 200)
+
+    const deletedContent = await fetch(
+      `${baseUrl}/api/v1/images/${uploaded.id}/content`,
+    )
+    assert.equal(deletedContent.status, 404)
   } finally {
     await closeContext(context)
   }

@@ -29,6 +29,7 @@ npm start          # 运行编译后的服务
 - `POST /api/v1/session`：获取或创建操作人
 - `GET /api/v1/images`：图片列表和搜索
 - `POST /api/v1/images`：上传图片
+- `DELETE /api/v1/images/:imageId`：删除自己上传的图片
 - `GET /api/v1/images/:imageId`：图片详情和标记
 - `GET /api/v1/images/:imageId/content`：读取图片内容
 - `POST /api/v1/images/:imageId/annotations`：新增标记

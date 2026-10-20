@@ -81,8 +81,8 @@ imageY = (pointerY - containerTop - panY) / scale
 - 每个标记必须有 1～200 字的说明，前后空白会被裁掉。
 - 标记编号由服务端分配，在同一张图内单调递增，删除后不复用。
 - 标记按 `number` 升序返回。
-- 所有操作人可以修改任意标记说明；只有标记创建人可以删除该标记。
-- `author` 始终表示创建人，删除权限按 `author_id` 校验。
+- 只有标记创建人可以修改说明和删除该标记。
+- `author` 始终表示创建人，修改与删除权限都按 `author_id` 校验。
 - 标记位置不可拖动，说明可以编辑。
 
 ### 1.6 请求 ID
@@ -122,13 +122,19 @@ X-Request-Id: 9d10511d-8a26-4f09-a144-a9eb61c73293
   "revision": 7,
   "annotationCount": 3,
   "createdAt": "2026-10-20T08:07:22.924Z",
-  "lastAnnotatedAt": "2026-10-20T09:12:00.000Z"
+  "lastAnnotatedAt": "2026-10-20T09:12:00.000Z",
+  "uploadedBy": {
+    "id": "3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781",
+    "displayName": "王芳",
+    "color": "#2563EB"
+  }
 }
 ```
 
 - `revision`：图片标注集合的版本号，每次新增、修改或删除标记后递增。
 - `annotationCount`：当前标记数量。
 - `lastAnnotatedAt`：最后一次标注变更时间，没有标记时为 `null`。
+- `uploadedBy`：图片上传人；系统导入图片可以为 `null`。
 - `imageUrl`：相对地址，前端使用 API 服务源地址拼接。
 - 不返回服务器文件路径或原始文件名，避免暴露本地目录结构。
 
@@ -182,6 +188,7 @@ X-Request-Id: 9d10511d-8a26-4f09-a144-a9eb61c73293
 | POST | `/api/v1/session` | 按姓名获取或创建操作人 | 否 |
 | GET | `/api/v1/images` | 图片库列表 | 否 |
 | POST | `/api/v1/images` | 上传图片 | 是 |
+| DELETE | `/api/v1/images/:imageId` | 删除自己上传的图片 | 是 |
 | GET | `/api/v1/images/:imageId` | 图片详情和全部标记 | 否 |
 | GET | `/api/v1/images/:imageId/content` | 读取图片文件 | 否 |
 | POST | `/api/v1/images/:imageId/annotations` | 新增单个标记 | 是 |
@@ -348,6 +355,25 @@ X-Request-Id: 9d10511d-8a26-4f09-a144-a9eb61c73293
 - 图片文件不可变，可使用长期缓存。
 - 未找到：`404 IMAGE_NOT_FOUND`。
 
+### DELETE `/api/v1/images/:imageId`
+
+删除图片及其全部标记。只有 `uploadedBy.id` 对应的操作人可以删除。
+
+响应 `200`：
+
+```json
+{
+  "deletedId": "4fa8fd31-1863-4e38-b20f-1d3f923ddcc3"
+}
+```
+
+服务端行为：
+
+- 数据库事务删除 `images` 记录，标记通过外键级联删除。
+- 提交成功后清理 `data/uploads/` 中的图片文件。
+- 发布 `image.deleted` 实时事件。
+- 非上传人返回 `403 IMAGE_DELETE_FORBIDDEN`。
+
 ## 6. 标注接口
 
 ### POST `/api/v1/images/:imageId/annotations`
@@ -414,6 +440,8 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 ### PATCH `/api/v1/annotations/:annotationId`
 
 修改标记说明。位置不可修改。
+
+只有标记创建人可以修改。非创建人返回 `403 ANNOTATION_EDIT_FORBIDDEN`。
 
 请求：
 
@@ -509,7 +537,8 @@ X-Operator-Id: 3f2f3ca8-8b0b-43e5-83dd-a866ec6d7781
 - 单次合计最多 50 项，保存后的标记总数不能超过 50。
 - 所有变更在同一个 SQLite 事务中提交，任何一项失败则全部回滚。
 - 任一新标记 ID 已存在时，按单条新增的幂等规则处理。
-- 修改和删除只校验对应标记的 `version`，不会因为其他人修改了别的标记而失败。
+- 修改和删除都校验对应标记的创建人和 `version`。
+- `updates` 中任一项不属于当前操作人时，整个事务回滚并返回 `403`。
 - `deletes` 中的每个标记都必须属于当前操作人；任一项不属于时整个事务回滚并返回 `403`。
 - 成功后图片 `revision` 只递增一次。
 
@@ -614,12 +643,32 @@ data: {
 
 事件只在 SQLite 事务提交成功后发送。前端收到事件后重新拉取图片详情，并按 `base/server/local` 三方合并；`sourceClientId` 与当前标签页一致时忽略自己的回声。
 
+图片删除时发送：
+
+```text
+event: image.deleted
+data: {
+  "eventId": 107,
+  "type": "image.deleted",
+  "imageId": "4fa8fd31-1863-4e38-b20f-1d3f923ddcc3",
+  "actor": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "displayName": "李雷",
+    "color": "#059669"
+  },
+  "sourceClientId": "d6520e2d-6f59-47be-8d95-18b22c845cf0",
+  "deletedAt": "2026-10-20T10:00:02.000Z"
+}
+```
+
 ## 7. 错误码
 
 | HTTP | code | 说明 |
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | 参数格式或业务约束不合法 |
 | 400 | `OPERATOR_REQUIRED` | 写请求缺少或携带未知操作人 |
+| 403 | `IMAGE_DELETE_FORBIDDEN` | 当前操作人不是图片上传人，不能删除 |
+| 403 | `ANNOTATION_EDIT_FORBIDDEN` | 当前操作人不是标记创建人，不能修改说明 |
 | 404 | `NOT_FOUND` | 路由不存在 |
 | 404 | `IMAGE_NOT_FOUND` | 图片不存在 |
 | 404 | `ANNOTATION_NOT_FOUND` | 标记不存在 |
@@ -769,12 +818,12 @@ Invoke-RestMethod `
 
 以下能力不在 v1 范围内，避免扩大作业边界：
 
-- 图片删除和替换
+- 图片替换
 - 标注区域框选
 - 标记位置拖动
 - 管理员、角色和权限管理
 - 标注评论线程
-- 实时多人推送
+- WebSocket 实时光标和逐字编辑
 - 图片和标注导出
 - 远程对象存储
 

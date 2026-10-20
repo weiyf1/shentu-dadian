@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import sharp, { type Metadata } from 'sharp'
 
 import { ApiError, badRequest, notFound } from '../errors.js'
+import { getRequestClientId } from '../http/client.js'
 import {
   imageListQuerySchema,
   imageParamsSchema,
@@ -15,10 +16,12 @@ import {
 import { requireOperator } from '../http/operator.js'
 import { listAnnotations } from '../services/annotations.js'
 import {
+  deleteImage,
   getImageRecord,
   getImageSummary,
   listImageSummaries,
 } from '../services/images.js'
+import { publishImageDeleted } from '../realtime/publish.js'
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
@@ -185,6 +188,41 @@ export async function imageRoutes(
       }
 
       return reply.code(201).send(summary)
+    },
+  )
+
+  app.delete(
+    '/api/v1/images/:imageId',
+    { preHandler: requireOperator },
+    async (request) => {
+      const { imageId } = parseInput(imageParamsSchema, request.params)
+      const image = deleteImage(
+        app.db,
+        imageId,
+        request.operator!,
+      )
+      const filePath = resolveUploadPath(uploadsDir, image.file_name)
+
+      try {
+        await unlink(filePath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          request.log.warn(
+            { err: error, imageId },
+            'Failed to remove deleted image file',
+          )
+        }
+      }
+
+      publishImageDeleted(app.events, {
+        imageId,
+        actor: request.operator!,
+        sourceClientId: getRequestClientId(request),
+      })
+
+      return {
+        deletedId: imageId,
+      }
     },
   )
 

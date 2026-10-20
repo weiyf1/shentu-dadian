@@ -9,6 +9,7 @@ import { ApiRequestError, listImages, resolveAssetUrl } from '@/services/api'
 import {
   isRealtimeConnected,
   onImageChanged,
+  onImageDeleted,
   realtimeSyncVersion,
 } from '@/services/realtime'
 import type { ImageSummary } from '@/types/api'
@@ -23,6 +24,7 @@ const uploadOpen = ref(false)
 let searchTimer: number | undefined
 let pollTimer: number | undefined
 let stopRealtimeListener: (() => void) | undefined
+let stopDeletedListener: (() => void) | undefined
 let requestSequence = 0
 
 async function loadImages(silent = false): Promise<void> {
@@ -80,6 +82,15 @@ onMounted(() => {
       void loadImages(true)
     }
   })
+  stopDeletedListener = onImageDeleted((event) => {
+    const before = images.value.length
+    images.value = images.value.filter(
+      (image) => image.id !== event.imageId,
+    )
+    if (images.value.length < before) {
+      total.value = Math.max(0, total.value - 1)
+    }
+  })
   pollTimer = window.setInterval(() => {
     if (!isRealtimeConnected.value) {
       void loadImages(true)
@@ -91,6 +102,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(searchTimer)
   window.clearInterval(pollTimer)
   stopRealtimeListener?.()
+  stopDeletedListener?.()
 })
 </script>
 
@@ -225,6 +237,9 @@ onBeforeUnmount(() => {
                     : '尚未标注'
                 }}
               </span>
+            </span>
+            <span class="card-uploader">
+              上传者：{{ image.uploadedBy?.displayName ?? '系统导入' }}
             </span>
           </span>
         </RouterLink>
@@ -651,6 +666,14 @@ onBeforeUnmount(() => {
   color: var(--muted);
   font-size: 8px;
   font-variant-numeric: tabular-nums;
+}
+
+.card-uploader {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 8px;
 }
 
 .add-image-card {
