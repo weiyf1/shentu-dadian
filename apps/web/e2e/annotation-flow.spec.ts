@@ -52,10 +52,48 @@ test('operator can enter, open an image, annotate, save and reload', async ({
   const zoomValue = page.locator('.zoom-value')
   const initialZoom = await zoomValue.textContent()
   const zoomToolbar = page.locator('.zoom-toolbar')
-  await zoomToolbar
-    .getByRole('button', { name: '放大', exact: true })
-    .click()
+  const zoomInButton = zoomToolbar.getByRole('button', {
+    name: '放大',
+    exact: true,
+  })
+  for (let step = 0; step < 3; step += 1) {
+    await zoomInButton.click()
+  }
   await expect(zoomValue).not.toHaveText(initialZoom ?? '')
+  await expect
+    .poll(async () => Number.parseInt((await zoomValue.textContent()) ?? '0', 10))
+    .toBeGreaterThanOrEqual(90)
+
+  const markerPin = page.locator('.marker-pin').first()
+  await expect(markerPin).toBeVisible()
+  const scaledAncestors = await markerPin.evaluate((element) => {
+    const scaled: string[] = []
+    let current = element.parentElement
+
+    while (current && !current.classList.contains('image-stage')) {
+      const transform = getComputedStyle(current).transform
+      if (transform !== 'none') {
+        const matrix = new DOMMatrixReadOnly(transform)
+        if (
+          Math.abs(matrix.a - 1) > 0.001 ||
+          Math.abs(matrix.d - 1) > 0.001
+        ) {
+          scaled.push(
+            `${current.className}: scale(${matrix.a}, ${matrix.d})`,
+          )
+        }
+      }
+      current = current.parentElement
+    }
+
+    return scaled
+  })
+  expect(scaledAncestors).toEqual([])
+  await page.screenshot({
+    path: 'test-results/marker-zoom.png',
+    fullPage: true,
+  })
+
   await zoomToolbar
     .getByRole('button', { name: '适应', exact: true })
     .click()
@@ -219,7 +257,7 @@ test('saved changes stream to another tab while preserving local drafts', async 
   ).toBeVisible()
   await page.getByLabel('标记说明').fill('实时新增标记')
   await page.getByRole('button', { name: '保存修改' }).click()
-  await expect(page.getByText('标记已保存')).toBeVisible()
+  await expect(page.getByText('标记已保存').last()).toBeVisible()
 
   await expect(
     secondPage.getByText('实时新增标记', { exact: true }),
@@ -232,7 +270,7 @@ test('saved changes stream to another tab while preserving local drafts', async 
     .click()
   await page.getByLabel('标记说明').fill('实时甲修改了同一条标记')
   await page.getByRole('button', { name: '保存修改' }).click()
-  await expect(page.getByText('标记已保存')).toBeVisible()
+  await expect(page.getByText('标记已保存').last()).toBeVisible()
 
   await expect(
     secondPage.getByText('远端已修改此标记', { exact: true }),

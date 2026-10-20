@@ -8,7 +8,11 @@ import {
 } from 'vue'
 
 import { useImageViewport } from '@/composables/useImageViewport'
-import { clamp, roundCoordinate } from '@/lib/viewportMath'
+import {
+  clamp,
+  imageToViewport,
+  roundCoordinate,
+} from '@/lib/viewportMath'
 import { resolveAssetUrl } from '@/services/api'
 import type { ImageSummary, LocalAnnotation } from '@/types/api'
 
@@ -73,10 +77,6 @@ const contentStyle = computed<CSSProperties>(() => ({
   width: `${contentWidth.value}px`,
   height: `${contentHeight.value}px`,
   transform: `translate3d(${viewport.state.panX}px, ${viewport.state.panY}px, 0) scale(${viewport.state.scale})`,
-}))
-
-const markerScaleStyle = computed<CSSProperties>(() => ({
-  transform: `scale(${viewport.inverseScale.value})`,
 }))
 
 const stageCursor = computed(() => {
@@ -369,6 +369,16 @@ function pinStyle(annotation: LocalAnnotation): CSSProperties {
   } as CSSProperties
 }
 
+function markerStyle(annotation: LocalAnnotation): CSSProperties {
+  const point = imageToViewport(
+    { x: annotation.x, y: annotation.y },
+    viewport.state,
+  )
+  return {
+    transform: `translate3d(${point.x}px, ${point.y}px, 0)`,
+  }
+}
+
 function markerLabel(annotation: LocalAnnotation): string {
   const label = annotation.isNew ? '新标记' : `标记 ${annotation.number}`
   return `${label}，${annotation.author.displayName}：${annotation.note || '尚未填写说明'}`
@@ -401,13 +411,16 @@ function markerLabel(annotation: LocalAnnotation): string {
         @error="handleImageError"
       />
 
+    </div>
+
+    <div class="marker-overlay" role="group" aria-label="图片标记">
       <button
         v-for="annotation in annotations"
         :key="annotation.id"
         type="button"
         class="marker-anchor"
         :class="{ 'is-selected': annotation.id === selectedId }"
-        :style="{ left: `${annotation.x}px`, top: `${annotation.y}px` }"
+        :style="markerStyle(annotation)"
         data-marker="true"
         data-interactive="true"
         :aria-label="markerLabel(annotation)"
@@ -415,25 +428,23 @@ function markerLabel(annotation: LocalAnnotation): string {
         @pointerdown.stop
         @click.stop="emit('select', annotation.id)"
       >
-        <span class="marker-scale" :style="markerScaleStyle">
-          <span
-            class="marker-pin"
-            :class="{
-              'marker-pin-new': annotation.isNew,
-              'marker-pin-selected': annotation.id === selectedId,
-            }"
-            :style="pinStyle(annotation)"
-          >
-            <span class="marker-number">
-              {{ annotation.isNew ? '新' : annotation.number }}
-            </span>
+        <span
+          class="marker-pin"
+          :class="{
+            'marker-pin-new': annotation.isNew,
+            'marker-pin-selected': annotation.id === selectedId,
+          }"
+          :style="pinStyle(annotation)"
+        >
+          <span class="marker-number">
+            {{ annotation.isNew ? '新' : annotation.number }}
           </span>
-          <span
-            v-if="annotation.id === selectedId"
-            class="marker-selection-ring"
-            aria-hidden="true"
-          ></span>
         </span>
+        <span
+          v-if="annotation.id === selectedId"
+          class="marker-selection-ring"
+          aria-hidden="true"
+        ></span>
       </button>
     </div>
 
@@ -523,6 +534,8 @@ function markerLabel(annotation: LocalAnnotation): string {
 .marker-anchor {
   position: absolute;
   z-index: 2;
+  top: 0;
+  left: 0;
   width: 0;
   height: 0;
   padding: 0;
@@ -530,19 +543,12 @@ function markerLabel(annotation: LocalAnnotation): string {
   border: 0;
   background: transparent;
   cursor: pointer;
+  pointer-events: auto;
+  transform-origin: 0 0;
 }
 
 .marker-anchor.is-selected {
   z-index: 3;
-}
-
-.marker-scale {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
 }
 
 .marker-pin {
@@ -564,6 +570,14 @@ function markerLabel(annotation: LocalAnnotation): string {
   transition:
     box-shadow 140ms ease,
     filter 140ms ease;
+}
+
+.marker-overlay {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .marker-pin::after {

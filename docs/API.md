@@ -73,7 +73,7 @@ imageX = (pointerX - containerLeft - panX) / scale
 imageY = (pointerY - containerTop - panY) / scale
 ```
 
-完整的缩放、平移、双指手势、图钉反向缩放和验收测试见 [`VIEWPORT_ALGORITHM.md`](VIEWPORT_ALGORITHM.md)。
+完整的缩放、平移、双指手势、图钉屏幕坐标层和验收测试见 [`VIEWPORT_ALGORITHM.md`](VIEWPORT_ALGORITHM.md)。
 
 ### 1.5 标注规则
 

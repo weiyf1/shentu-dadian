@@ -8,8 +8,8 @@
 
 1. 数据库只保存图片原始像素坐标 `(x, y)`。
 2. 标记锚点不保存屏幕坐标、百分比或缩放后的坐标。
-3. 图片和标记共用同一个平移、缩放状态。
-4. 图钉的视觉尺寸保持屏幕大小，但锚点仍精确落在图片像素上。
+3. 图片和标记共用同一个平移、缩放状态，但图钉在独立屏幕坐标层渲染。
+4. 图钉不经过非 1 缩放，视觉尺寸保持屏幕大小且文字清晰，锚点仍精确落在图片像素上。
 5. 缩放以用户鼠标或双指中心为锚点，锚点下的图片内容不移动。
 
 ## 2. 坐标系
@@ -73,29 +73,29 @@ viewportY = clientY - viewportRect.top
     }"
   >
     <img class="image" :src="imageUrl" draggable="false" />
+  </div>
 
+  <!-- 图钉使用独立的屏幕坐标层，不能再放进缩放容器 -->
+  <div class="marker-overlay">
     <button
       v-for="annotation in annotations"
       :key="annotation.id"
       class="marker-anchor"
       :style="{
-        left: `${annotation.x}px`,
-        top: `${annotation.y}px`,
+        transform: `translate3d(
+          ${panX + annotation.x * scale}px,
+          ${panY + annotation.y * scale}px,
+          0
+        )`,
       }"
       @pointerdown.stop
       @click.stop="selectAnnotation(annotation)"
     >
-      <span
-        class="marker-visual"
-        :style="{ transform: `scale(${1 / scale})` }"
-      >
+      <span class="marker-visual">
         {{ annotation.number }}
       </span>
     </button>
   </div>
-
-  <!-- Popover 放在非缩放层 -->
-  <div class="screen-overlay"></div>
 </div>
 ```
 
@@ -126,12 +126,23 @@ viewportY = clientY - viewportRect.top
 
 .marker-anchor {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 0;
   height: 0;
   overflow: visible;
   border: 0;
   padding: 0;
   background: transparent;
+  pointer-events: auto;
+  transform-origin: 0 0;
+}
+
+.marker-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .marker-visual {
@@ -517,49 +528,52 @@ const nextState = {
 
 这个公式同时处理“双指缩放”和“双指移动”，不需要分别实现。
 
-## 9. 图钉视觉尺寸保持不变
+## 9. 图钉使用屏幕坐标层
 
-父容器缩放 `s` 后，图钉也会被一起放大。为了让图钉在屏幕上始终是 `34 × 42` CSS 像素，图钉内部做反向缩放：
+图钉不能放进图片缩放容器再做 `scale(1 / scale)`。虽然数学尺寸可以抵消，但浏览器会先栅格化文字、边框和阴影，再进行父层缩放与子层反向缩放，最终重采样，导致图钉在约 90%～100% 的常见缩放比例下就开始发虚。
 
-```css
-.marker-visual {
-  transform: scale(1 / s);
-  transform-origin: 50% 100%;
-}
+正确做法：
+
+1. `.image-content` 只包含图片，使用 `pan + scale`。
+2. `.marker-overlay` 是视口内不缩放的兄弟层。
+3. 每个图钉根据图片坐标计算屏幕坐标：
+
+```ts
+screenX = panX + annotation.x * scale
+screenY = panY + annotation.y * scale
 ```
 
-推导：
-
-- 图钉的布局尺寸是 `W × H`。
-- 父容器把图钉放大为 `W*s × H*s`。
-- 图钉自身缩小 `1/s`，视觉尺寸恢复为 `W × H`。
-- 反向缩放原点是图钉底部中心，即锚点所在位置。
-- 所以视觉尺寸变化时，锚点不会移动。
-
-标记锚点：
+4. 用 `translate3d` 把图钉锚点移动到该位置：
 
 ```css
+.marker-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .marker-anchor {
-  left: x px;
-  top: y px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: auto;
+  transform-origin: 0 0;
 }
-```
 
-图钉底部中心：
-
-```css
 .marker-visual {
-  left: -17px;
-  top: -42px;
-  width: 34px;
-  height: 42px;
-  transform-origin: 50% 100%;
+  position: absolute;
+  left: -18px;
+  top: -44px;
+  width: 36px;
+  height: 44px;
 }
 ```
 
-这样图钉尖端恰好落在 `(x, y)`。
+图钉的祖先层只能是平移 `translate3d`，不能存在非 1 的缩放矩阵。这样图钉文字、边框和阴影始终由浏览器在最终屏幕尺寸下绘制，在任意缩放比例都能保持清晰。
 
-选择态可额外绘制一个直径 12px 的高亮圆点，同样使用反向缩放，圆心必须与锚点重合。
+选择态高亮圆点也放在同一个屏幕坐标层，圆心与图片坐标锚点重合。
 
 ## 10. 就地编辑 Popover（可选）
 
@@ -682,6 +696,7 @@ src/
 8. 拖动结束时没有判断移动距离，误把平移当成新增标记。
 9. 使用 `devicePixelRatio` 二次换算 CSS 像素。
 10. 重新打开图片时按当前屏幕大小重新计算标记坐标。
+11. 把图钉放在图片缩放容器中，再用 `scale(1 / scale)` 反向缩放。
 
 ## 16. 验收测试
 
@@ -701,8 +716,9 @@ src/
 4. 刷新页面后重新打开图片，标记仍位于 `(800, 450)`。
 5. 缩放后在新的位置添加标记，数据库中的坐标必须与当前变换对应。
 6. 拖动图片不能新增标记。
-7. 图钉在 25%、100%、400% 缩放下保持相同屏幕尺寸。
+7. 图钉在 25%、90%、100%、400% 缩放下保持相同屏幕尺寸且文字清晰。
 8. 编辑 Popover 在不同缩放比例下保持正常字号，并跟随锚点。
+9. 图钉到 `.image-stage` 之间不存在非 1 缩放矩阵。
 
 ### 16.3 数值复现
 

@@ -32,9 +32,6 @@ export function useImageViewport() {
 
   const zoomPercent = computed(() => Math.round(state.scale * 100))
   const scaleBounds = computed(() => getScaleBounds(fitScale.value))
-  const inverseScale = computed(() =>
-    state.scale > 0 ? 1 / state.scale : 1,
-  )
 
   function measureViewport(): void {
     const element = stageElement.value
@@ -198,7 +195,6 @@ export function useImageViewport() {
     fitScale,
     zoomPercent,
     scaleBounds,
-    inverseScale,
     attach,
     fit,
     reset,
