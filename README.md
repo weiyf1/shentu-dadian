@@ -50,6 +50,7 @@ npm run dev
 - `docs/VIEWPORT_ALGORITHM.md`：图片缩放、平移和标记定位算法
 - `docs/REALTIME_CONCURRENCY.md`：细粒度并发保存与 SSE 实时同步设计
 - `docs/VERIFICATION.md`：验证结果与可复现的已知失败
+- `docs/TESTING.md`：测试范围、用例、命令和覆盖边界
 
 ## 接口文档
 
@@ -62,3 +63,5 @@ npm run dev
 并发与实时同步演进方案见 [`docs/REALTIME_CONCURRENCY.md`](docs/REALTIME_CONCURRENCY.md)。
 
 验证命令、实际输出和已知失败复现步骤见 [`docs/VERIFICATION.md`](docs/VERIFICATION.md)。
+
+完整测试文档见 [`docs/TESTING.md`](docs/TESTING.md)。

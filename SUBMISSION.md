@@ -26,6 +26,7 @@
 - [docs/DATABASE.md](docs/DATABASE.md)
 - [docs/VIEWPORT_ALGORITHM.md](docs/VIEWPORT_ALGORITHM.md)
 - [docs/REALTIME_CONCURRENCY.md](docs/REALTIME_CONCURRENCY.md)
+- [docs/TESTING.md](docs/TESTING.md)
 - [docs/VERIFICATION.md](docs/VERIFICATION.md)
 
 ## 2. 解题思路
