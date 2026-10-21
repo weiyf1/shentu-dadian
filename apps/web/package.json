@@ -11,6 +11,7 @@
     "test:unit": "vitest run",
     "clean:e2e": "node scripts/clean-e2e.mjs",
     "test:e2e": "node scripts/clean-e2e.mjs && playwright test",
+    "test:known-failure": "node scripts/clean-e2e.mjs && playwright test --config playwright.known-failure.config.ts",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
     "lint": "npm run lint:oxlint && npm run lint:eslint",

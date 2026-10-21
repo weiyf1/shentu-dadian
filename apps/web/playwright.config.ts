@@ -19,6 +19,7 @@ const inheritedEnvironment = Object.fromEntries(
 
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: ['**/known-failure/**'],
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,

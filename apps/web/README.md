@@ -55,11 +55,14 @@ npm run dev        # 开发服务器
 npm run type-check # Vue TypeScript 检查
 npm run test:unit  # 画布数学单元测试
 npm run test:e2e   # 使用系统 Edge 的端到端测试
+npm run test:known-failure # 期望失败的草稿恢复已知限制测试
 npm run build      # 生产构建
 npm run preview    # 预览生产构建
 ```
 
 端到端测试使用独立的 `apps/server/data/e2e.db` 和 `e2e-uploads/`，不会修改主数据库。
+
+`test:known-failure` 预期以非零退出码结束，详细步骤见 `docs/VERIFICATION.md`。
 
 ## 环境变量
 
